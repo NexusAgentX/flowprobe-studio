@@ -1,0 +1,9 @@
+id = "NET-001"
+milestone = "v0.1"
+title = "Implement NetworkRuntime boundary, fake runtime, and managed sing-box adapter"
+goal = "Provide supervisor-facing runtime lifecycle/capability APIs with a deterministic fake runtime and a thin sing-box process adapter, without coupling other modules to sing-box internals."
+depends_on = ["FOUND-001"]
+allowed_paths = ["runtime/singbox/**", "crates/supervisor/**", "crates/runtime-api/**", "tests/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "crates/capture-core/**", "crates/analyzer-runtime/**"]
+acceptance = ["cargo test --workspace", "cargo clippy --workspace --all-targets -- -D warnings"]
+definition_of_done = ["Fake runtime supports lifecycle/health/capability tests", "sing-box adapter reports typed failures rather than fake success", "No consumer parses undocumented sing-box internals"]

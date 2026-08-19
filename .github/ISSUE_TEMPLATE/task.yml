@@ -1,0 +1,26 @@
+name: Implementation task
+description: Track a repository task contract; the TOML contract remains authoritative.
+title: "[TASK] "
+labels: []
+body:
+  - type: input
+    id: task_id
+    attributes:
+      label: Task ID
+      placeholder: CAP-001
+    validations:
+      required: true
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      placeholder: v0.1
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Status / evidence
+      description: Link the task contract and later PR/CI evidence. Do not duplicate or redefine the contract here.
+    validations:
+      required: true

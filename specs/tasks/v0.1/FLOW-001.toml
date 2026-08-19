@@ -1,0 +1,9 @@
+id = "FLOW-001"
+milestone = "v0.1"
+title = "Implement NormalizedFlow v0 types and fixture serialization"
+goal = "Create the shared typed boundary for connection/TLS/HTTP/stream metadata and opaque payload references."
+depends_on = ["FOUND-001"]
+allowed_paths = ["crates/protocol/**", "crates/model/**", "tests/fixtures/**", "tests/contract/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**"]
+acceptance = ["cargo test --workspace", "cargo clippy --workspace --all-targets -- -D warnings"]
+definition_of_done = ["Round-trip fixture serialization is deterministic", "No storage filesystem paths leak into public model", "Process attribution includes provenance/confidence", "Contract tests cover unknown/additive optional protocol metadata"]

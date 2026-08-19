@@ -1,0 +1,9 @@
+id = "STORE-001"
+milestone = "v0.1"
+title = "Implement local SQLite metadata store and opaque blob API"
+goal = "Persist/query NormalizedFlow metadata and semantic events while keeping payload storage behind opaque references."
+depends_on = ["FLOW-001"]
+allowed_paths = ["crates/storage/**", "tests/contract/storage/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "plugins/**"]
+acceptance = ["cargo test -p flowprobe-storage", "cargo clippy -p flowprobe-storage --all-targets -- -D warnings"]
+definition_of_done = ["Fresh schema creation and first migration are tested", "Metadata-only path does not persist request/response bodies", "Query API supports time/host/protocol pagination needed by Traffic UI"]

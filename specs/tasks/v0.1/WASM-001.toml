@@ -1,0 +1,9 @@
+id = "WASM-001"
+milestone = "v0.1"
+title = "Implement sandboxed Analyzer Runtime proof and demo analyzer"
+goal = "Load a WASM analyzer through the draft WIT contract and transform a deterministic normalized event reference into a SemanticEvent."
+depends_on = ["FLOW-001", "STORE-001"]
+allowed_paths = ["crates/analyzer-runtime/**", "crates/plugin-sdk/**", "plugins/demo/**", "tests/contract/analyzer/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "crates/capture-core/**"]
+acceptance = ["cargo test -p flowprobe-analyzer-runtime", "cargo clippy -p flowprobe-analyzer-runtime --all-targets -- -D warnings"]
+definition_of_done = ["Demo plugin cannot obtain ambient network/filesystem access", "Semantic event is deterministic for fixture input", "Plugin error/resource-limit failure does not crash host", "Plugin does not open SQLite directly"]
