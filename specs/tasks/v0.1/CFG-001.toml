@@ -1,0 +1,9 @@
+id = "CFG-001"
+milestone = "v0.1"
+title = "Implement protected sing-box config compiler proof"
+goal = "Compile System Base, User Profile, and Runtime Overlay into deterministic validated runtime JSON while protecting the __flowprobe_ namespace."
+depends_on = ["FOUND-001"]
+allowed_paths = ["crates/config-compiler/**", "runtime/singbox/**", "tests/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**"]
+acceptance = ["cargo test -p flowprobe-config-compiler", "cargo clippy -p flowprobe-config-compiler --all-targets -- -D warnings"]
+definition_of_done = ["Collision with reserved namespace is rejected", "Compilation is deterministic", "Redacted display form does not expose configured proxy secrets", "Tests cover invalid user input and protected-object overwrite attempts"]

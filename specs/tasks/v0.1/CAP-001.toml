@@ -1,0 +1,9 @@
+id = "CAP-001"
+milestone = "v0.1"
+title = "Implement Capture Core HTTP/TLS vertical-slice decoder"
+goal = "Accept deterministic test connections, detect TLS/HTTP, and emit NormalizedFlow for basic HTTP/1.x and a minimal HTTP/2 path without product-specific knowledge."
+depends_on = ["FLOW-001"]
+allowed_paths = ["crates/capture-core/**", "tests/fixtures/tls/**", "tests/fixtures/http1/**", "tests/fixtures/http2/**", "tests/integration/capture/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "plugins/**", "runtime/singbox/**"]
+acceptance = ["cargo test -p flowprobe-capture-core", "cargo clippy -p flowprobe-capture-core --all-targets -- -D warnings"]
+definition_of_done = ["Basic HTTP/1 request/response fixture emits expected normalized transaction", "Basic HTTP/2 fixture emits expected normalized transaction", "Malformed fixture does not panic", "No product hostname/endpoint is hard coded"]

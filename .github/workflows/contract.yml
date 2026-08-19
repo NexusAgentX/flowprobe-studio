@@ -1,0 +1,41 @@
+name: Repository Contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate task contracts
+        run: python scripts/validate_tasks.py
+      - name: Check anti-shortcut quality markers
+        run: python scripts/quality_gate.py
+      - name: Guard protected architecture changes
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          if echo "$changed" | grep -Eq '^(PRODUCT\.md|ARCHITECTURE\.md|docs/adr/|docs/contracts/)'; then
+            if [[ ! "$PR_TITLE" =~ ^(arch:|\[architecture\]) ]]; then
+              echo "Protected architecture files changed without an architecture PR title (arch: ...)."
+              echo "$changed"
+              exit 1
+            fi
+          fi

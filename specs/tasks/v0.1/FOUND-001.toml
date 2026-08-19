@@ -1,0 +1,9 @@
+id = "FOUND-001"
+milestone = "v0.1"
+title = "Scaffold reproducible monorepo and local development toolchain"
+goal = "Create the minimal Rust/Tauri workspace, typed IPC skeleton, developer commands, and CI expansion needed for subsequent v0.1 tasks without implementing product behavior prematurely."
+depends_on = []
+allowed_paths = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "apps/desktop/**", "crates/**", "runtime/**", "plugins/**", "scripts/**", ".github/workflows/**", "DEVELOPMENT.md"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**"]
+acceptance = ["cargo fmt --all -- --check", "cargo check --workspace", "cargo test --workspace", "python scripts/validate_tasks.py"]
+definition_of_done = ["Fresh checkout has documented bootstrap commands", "Workspace contains no fake production success paths", "CI runs Rust formatting/check/tests plus repository contract checks"]

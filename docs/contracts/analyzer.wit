@@ -1,0 +1,37 @@
+package flowprobe:analyzer@0.1.0;
+
+// Architecture contract draft. v0.1 implementation may refine types only through
+// an explicit contract task; feature implementers must not silently change it.
+
+interface types {
+  record event-ref {
+    id: string,
+    kind: string,
+  }
+
+  record semantic-event {
+    namespace: string,
+    kind: string,
+    timestamp-ns: u64,
+    json-attributes: string,
+  }
+
+  record analyzer-info {
+    id: string,
+    version: string,
+  }
+}
+
+interface host {
+  use types.{event-ref, semantic-event};
+  get-event-json: func(event: event-ref) -> result<string, string>;
+  emit-semantic: func(event: semantic-event) -> result<_, string>;
+  log: func(level: string, message: string);
+}
+
+world analyzer {
+  import host;
+  use types.{analyzer-info, event-ref};
+  export info: func() -> analyzer-info;
+  export analyze: func(event: event-ref) -> result<_, string>;
+}

@@ -1,0 +1,9 @@
+id = "UI-001"
+milestone = "v0.1"
+title = "Implement desktop shell, status surface, and Traffic proof UI"
+goal = "Provide a minimal Tauri UI that communicates through typed IPC and can display/query normalized traffic metadata and semantic demo output."
+depends_on = ["FOUND-001", "STORE-001"]
+allowed_paths = ["apps/desktop/**", "crates/supervisor/**", "crates/ipc/**"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "crates/capture-core/**", "crates/analyzer-runtime/**"]
+acceptance = ["cargo test --workspace", "pnpm --dir apps/desktop lint", "pnpm --dir apps/desktop test"]
+definition_of_done = ["Renderer performs no privileged network/trust-store operation directly", "Traffic list can paginate test metadata", "Detail view displays normalized fields without reading database files directly", "Proxy/Capture/Analyze/Settings navigation boundaries are visible even if minimal"]
