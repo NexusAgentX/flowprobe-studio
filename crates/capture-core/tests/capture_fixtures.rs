@@ -493,6 +493,40 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
         informational_result,
         Err(CaptureError::UnsupportedHttp2(_))
     ));
+
+    for (suffix, client_headers, status_header) in [
+        (
+            "h2_head_content_length",
+            b"\x02\x04HEAD\x87\x84\x01\x0cfixture.test".as_slice(),
+            0x88,
+        ),
+        ("h2_304_content_length", valid_headers.as_slice(), 0x8b),
+    ] {
+        let client = h2_request(1, 0x05, client_headers, None);
+        let mut response_headers = vec![status_header];
+        response_headers.extend_from_slice(b"\x00\x0econtent-length\x0212");
+        let mut server = h2_frame(4, 0, 0, &[]);
+        server.extend(h2_frame(1, 0x05, 1, &response_headers));
+        let flow = CaptureCore::default()
+            .capture(
+                context(suffix, 443),
+                DirectionalData {
+                    client_to_server: &client,
+                    server_to_client: &server,
+                },
+                TlsInterception::NotAttempted,
+                None,
+            )
+            .expect("HEAD and 304 may describe representation length without DATA");
+        assert_eq!(
+            http_transaction(&flow)
+                .response
+                .as_ref()
+                .expect("response metadata")
+                .byte_count,
+            0
+        );
+    }
 }
 
 #[test]

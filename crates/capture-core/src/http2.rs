@@ -557,14 +557,15 @@ fn response_metadata(
             "informational response in the minimum v0 path",
         ));
     }
-    if byte_count != 0
-        && (request_method.eq_ignore_ascii_case("HEAD") || matches!(status, 204 | 304))
-    {
+    let head_response = request_method.eq_ignore_ascii_case("HEAD");
+    if byte_count != 0 && (head_response || matches!(status, 204 | 304)) {
         return Err(CaptureError::MalformedHttp2(
             "response semantics forbid a message body",
         ));
     }
-    validate_content_length(fields, byte_count, HttpSide::Response)?;
+    if !head_response && status != 304 {
+        validate_content_length(fields, byte_count, HttpSide::Response)?;
+    }
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Response, "content-type")?;
     Ok(HttpResponseMetadata {
