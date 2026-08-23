@@ -1,0 +1,20 @@
+[package]
+name = "flowprobe-analyzer-runtime"
+description = "Capability-oriented Wasmtime sandbox for FlowProbe analyzers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+semver = "1"
+serde_json.workspace = true
+wasmtime = { version = "48.0.0", default-features = false, features = ["anyhow", "component-model", "cranelift", "runtime", "std"] }
+
+[dev-dependencies]
+wasmprinter = "0.254.0"
+wat = "1"
+wit-component = "0.254.0"
+
+[lints]
+workspace = true

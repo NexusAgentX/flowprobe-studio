@@ -2,12 +2,14 @@
 resolver = "3"
 members = [
   "apps/desktop/src-tauri",
+  "crates/analyzer-runtime",
   "crates/capture-core",
   "crates/config-compiler",
   "crates/ipc",
   "crates/model",
   "crates/storage",
   "crates/supervisor",
+  "plugins/demo",
 ]
 
 [workspace.package]

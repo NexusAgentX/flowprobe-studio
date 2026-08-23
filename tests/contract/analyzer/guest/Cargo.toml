@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "flowprobe-adversarial-analyzer-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+hostile-info = []
+invalid-info = []
+
+[dependencies]
+wit-bindgen = "0.60.0"
+
+[lints.rust]
+# Generated canonical-ABI export shims contain the only unsafe code.
+unsafe_code = "allow"

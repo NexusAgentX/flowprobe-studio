@@ -1,0 +1,20 @@
+[package]
+name = "flowprobe-demo-analyzer"
+description = "Deterministic reference analyzer for the FlowProbe Analyzer v0.1 contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json.workspace = true
+wit-bindgen = "0.60.0"
+
+[lints.rust]
+# wit-bindgen's generated canonical-ABI export shims necessarily contain
+# unsafe code. The analyzer implementation itself contains no handwritten
+# unsafe blocks and is still isolated by the Wasmtime host.
+unsafe_code = "allow"
