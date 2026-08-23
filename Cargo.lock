@@ -763,6 +763,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowprobe-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flowprobe-supervisor"
 version = "0.1.0"
 dependencies = [
