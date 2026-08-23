@@ -1,0 +1,11 @@
+{
+  "schema_version": "flowprobe-plugin-proof-v0",
+  "id": "flowprobe.demo",
+  "version": "0.1.0",
+  "analyzer_contract": "flowprobe:analyzer@0.1.0",
+  "permissions": {
+    "read_current_event": true,
+    "emit_semantic": true,
+    "write_log": false
+  }
+}
