@@ -12,6 +12,37 @@ printf '%s\n' "$*" >> "$fixture_directory/argv.log"
 
 if [ "$#" -eq 1 ] && [ "$1" = "version" ]; then
   case "$behavior" in
+    version_descendant_normal|version_descendant_exit)
+      (
+        trap '' TERM HUP INT
+        : > "$fixture_directory/descendant-ready"
+        while :; do sleep 1; done
+      ) >/dev/null 2>&1 &
+      descendant_pid=$!
+      printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+      while [ ! -f "$fixture_directory/descendant-ready" ]; do
+        sleep 0.01
+      done
+      : > "$fixture_directory/group-cleanup-ready"
+      if [ "$behavior" = "version_descendant_exit" ]; then
+        exit 19
+      fi
+      printf 'sing-box version 1.12.0\n'
+      ;;
+    version_pipe_descendant)
+      (
+        trap '' TERM HUP INT
+        : > "$fixture_directory/descendant-ready"
+        while :; do sleep 1; done
+      ) &
+      descendant_pid=$!
+      printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+      while [ ! -f "$fixture_directory/descendant-ready" ]; do
+        sleep 0.01
+      done
+      : > "$fixture_directory/group-cleanup-ready"
+      printf 'sing-box version 1.12.0\n'
+      ;;
     version_timeout)
       sleep 10 &
       printf '%s\n' "$!" > "$fixture_directory/descendant-pid"
@@ -71,6 +102,22 @@ done
 case "$subcommand" in
   check)
     case "$behavior" in
+      check_descendant_normal|check_descendant_exit)
+        (
+          trap '' TERM HUP INT
+          : > "$fixture_directory/descendant-ready"
+          while :; do sleep 1; done
+        ) &
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        while [ ! -f "$fixture_directory/descendant-ready" ]; do
+          sleep 0.01
+        done
+        : > "$fixture_directory/group-cleanup-ready"
+        if [ "$behavior" = "check_descendant_exit" ]; then
+          exit 19
+        fi
+        ;;
       check_timeout)
         sleep 10 &
         printf '%s\n' "$!" > "$fixture_directory/descendant-pid"
@@ -102,6 +149,7 @@ case "$subcommand" in
         ;;
       run_crash_marker)
         trap 'exit 0' TERM HUP INT
+        : > "$fixture_directory/run-ready"
         while [ ! -f "$fixture_directory/crash-now" ]; do
           sleep 0.02
         done
@@ -109,7 +157,41 @@ case "$subcommand" in
         ;;
       run_ignore_term)
         trap '' TERM HUP INT
+        : > "$fixture_directory/run-ignore-term-ready"
         while :; do sleep 1; done
+        ;;
+      run_early_exit_with_descendant)
+        (
+          trap '' TERM HUP INT
+          : > "$fixture_directory/descendant-ready"
+          while :; do sleep 1; done
+        ) &
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        while [ ! -f "$fixture_directory/descendant-ready" ]; do
+          sleep 0.01
+        done
+        : > "$fixture_directory/group-cleanup-ready"
+        exit 42
+        ;;
+      run_crash_with_descendant)
+        trap 'exit 0' TERM HUP INT
+        (
+          trap '' TERM HUP INT
+          : > "$fixture_directory/descendant-ready"
+          while :; do sleep 1; done
+        ) &
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        while [ ! -f "$fixture_directory/descendant-ready" ]; do
+          sleep 0.01
+        done
+        : > "$fixture_directory/group-cleanup-ready"
+        while [ ! -f "$fixture_directory/crash-now" ]; do
+          sleep 0.02
+        done
+        : > "$fixture_directory/leader-exiting"
+        exit 42
         ;;
       run_leader_exits_descendant_ignores_term)
         trap 'exit 0' TERM HUP INT
@@ -128,6 +210,7 @@ case "$subcommand" in
         ;;
       *)
         trap 'exit 0' TERM HUP INT
+        : > "$fixture_directory/run-ready"
         while :; do sleep 1; done
         ;;
     esac

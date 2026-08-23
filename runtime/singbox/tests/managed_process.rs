@@ -18,7 +18,11 @@ use flowprobe_runtime_api::{
     RuntimeHealth, RuntimeOperation, RuntimePhase, RuntimeState, RuntimeUnavailableReason,
 };
 use flowprobe_singbox_runtime::{SingBoxOptions, SingBoxRuntime};
-use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
+use nix::{
+    errno::Errno,
+    sys::signal::{kill, killpg},
+    unistd::Pid,
+};
 
 static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const FAKE_EXECUTABLE: &[u8] = include_bytes!("fixtures/fake-sing-box.sh");
@@ -63,7 +67,7 @@ impl TestDirectory {
             executable: self.executable.clone(),
             state_directory: self.state_directory.clone(),
             command_timeout: Duration::from_millis(500),
-            startup_probe_duration: Duration::from_millis(60),
+            startup_probe_duration: Duration::from_millis(500),
             stop_timeout: Duration::from_millis(100),
             max_config_bytes: 1024 * 1024,
             max_version_output_bytes: 1_024,
@@ -177,6 +181,37 @@ fn assert_process_gone(process_id: i32) {
                 thread::sleep(Duration::from_millis(10));
             }
             Err(error) => panic!("process liveness check failed: {error}"),
+        }
+    }
+}
+
+fn assert_process_alive(process_id: i32) {
+    match kill(Pid::from_raw(process_id), None) {
+        Ok(()) | Err(Errno::EPERM) => {}
+        Err(error) => panic!("process {process_id} should be alive: {error}"),
+    }
+}
+
+fn assert_process_group_alive(process_group_id: i32) {
+    match killpg(Pid::from_raw(process_group_id), None) {
+        Ok(()) | Err(Errno::EPERM) => {}
+        Err(error) => panic!("process group {process_group_id} should be alive: {error}"),
+    }
+}
+
+fn assert_process_group_gone(process_group_id: i32) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match killpg(Pid::from_raw(process_group_id), None) {
+            Err(Errno::ESRCH) => return,
+            Ok(()) | Err(Errno::EPERM) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "process group {process_group_id} was not cleaned up"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("process-group liveness check failed: {error}"),
         }
     }
 }
@@ -423,6 +458,82 @@ fn version_exit_and_invalid_bytes_have_distinct_typed_failures() {
 }
 
 #[test]
+fn completed_version_commands_reclaim_their_original_process_groups() {
+    for (behavior, expected) in [
+        ("version_descendant_normal", Ok("sing-box version 1.12.0")),
+        ("version_descendant_exit", Err(Some(19))),
+    ] {
+        let directory = TestDirectory::new(behavior);
+        let runtime =
+            SingBoxRuntime::new(directory.options()).expect("version runtime should initialize");
+
+        let result = runtime.version();
+        directory.wait_for_marker("group-cleanup-ready");
+        let leader_pid = directory.recorded_pid("last-pid");
+        let descendant_pid = directory.recorded_pid("descendant-pid");
+        match expected {
+            Ok(version) => assert_eq!(
+                result
+                    .expect("normal version command should succeed")
+                    .as_str(),
+                version
+            ),
+            Err(exit_code) => assert_eq!(
+                result,
+                Err(RuntimeError::ProcessExited {
+                    operation: RuntimeOperation::Version,
+                    exit_code,
+                })
+            ),
+        }
+        assert_process_gone(leader_pid);
+        assert_process_gone(descendant_pid);
+        assert_process_group_gone(leader_pid);
+    }
+}
+
+#[test]
+fn completed_check_commands_reclaim_their_original_process_groups() {
+    for (behavior, expected) in [
+        ("check_descendant_normal", Ok(())),
+        (
+            "check_descendant_exit",
+            Err(RuntimeError::ValidationRejected),
+        ),
+    ] {
+        let directory = TestDirectory::new(behavior);
+        let runtime =
+            SingBoxRuntime::new(directory.options()).expect("check runtime should initialize");
+
+        assert_eq!(runtime.validate_config(&unchecked_config("{}")), expected);
+        directory.wait_for_marker("group-cleanup-ready");
+        let leader_pid = directory.recorded_pid("last-pid");
+        let descendant_pid = directory.recorded_pid("descendant-pid");
+        assert_process_gone(leader_pid);
+        assert_process_gone(descendant_pid);
+        assert_process_group_gone(leader_pid);
+        assert!(directory.runtime_config_files().is_empty());
+    }
+}
+
+#[test]
+fn version_reclaims_a_descendant_that_holds_the_output_pipe_open() {
+    let directory = TestDirectory::new("version_pipe_descendant");
+    let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+
+    assert_eq!(
+        runtime.version().expect("version should finish").as_str(),
+        "sing-box version 1.12.0"
+    );
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+}
+
+#[test]
 fn immediate_exit_and_later_crash_are_observed_without_leaking_config_files() {
     let exit_directory = TestDirectory::new("run_exit");
     let exit_runtime =
@@ -445,6 +556,7 @@ fn immediate_exit_and_later_crash_are_observed_without_leaking_config_files() {
     let crash_runtime =
         SingBoxRuntime::new(crash_directory.options()).expect("crash runtime should initialize");
     crash_runtime.start(&config).expect("runtime should start");
+    crash_directory.wait_for_marker("run-ready");
     crash_directory.mark_crash();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -475,6 +587,105 @@ fn immediate_exit_and_later_crash_are_observed_without_leaking_config_files() {
 }
 
 #[test]
+fn startup_early_exit_reclaims_a_ready_term_ignoring_descendant() {
+    let directory = TestDirectory::new("run_early_exit_with_descendant");
+    let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+
+    assert_eq!(
+        runtime.start(&unchecked_config("{}")),
+        Err(RuntimeError::ProcessExited {
+            operation: RuntimeOperation::Start,
+            exit_code: Some(42),
+        })
+    );
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    assert!(directory.runtime_config_files().is_empty());
+}
+
+#[test]
+fn natural_crash_refresh_reclaims_descendants_before_reporting_the_crash() {
+    for query in ["health", "state"] {
+        let directory = TestDirectory::new("run_crash_with_descendant");
+        let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+        runtime
+            .start(&unchecked_config("{}"))
+            .expect("runtime should start");
+        directory.wait_for_marker("group-cleanup-ready");
+        let leader_pid = directory.recorded_pid("last-pid");
+        let descendant_pid = directory.recorded_pid("descendant-pid");
+        assert_process_alive(leader_pid);
+        assert_process_alive(descendant_pid);
+        assert_process_group_alive(leader_pid);
+        directory.mark_crash();
+        directory.wait_for_marker("leader-exiting");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let crashed = match query {
+                "health" => matches!(
+                    runtime.health().expect("health query should succeed"),
+                    RuntimeHealth::Unhealthy {
+                        exit_code: Some(42)
+                    }
+                ),
+                "state" => matches!(
+                    runtime.state().expect("state query should succeed"),
+                    RuntimeState::Crashed {
+                        generation: 1,
+                        exit_code: Some(42)
+                    }
+                ),
+                _ => unreachable!("test query is fixed"),
+            };
+            if crashed {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "runtime did not report its crash"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_process_gone(leader_pid);
+        assert_process_gone(descendant_pid);
+        assert_process_group_gone(leader_pid);
+        assert!(directory.runtime_config_files().is_empty());
+    }
+}
+
+#[test]
+fn stop_after_natural_crash_reclaims_descendants_before_returning() {
+    let directory = TestDirectory::new("run_crash_with_descendant");
+    let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+    runtime
+        .start(&unchecked_config("{}"))
+        .expect("runtime should start");
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
+    directory.mark_crash();
+    directory.wait_for_marker("leader-exiting");
+    thread::sleep(Duration::from_millis(50));
+
+    assert_eq!(
+        runtime.stop().expect("stop should clean the crashed group"),
+        RuntimeState::Stopped { generation: 1 }
+    );
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    assert!(directory.runtime_config_files().is_empty());
+}
+
+#[test]
 fn stop_escalates_to_kill_for_a_process_that_ignores_termination() {
     let directory = TestDirectory::new("run_ignore_term");
     let mut options = directory.options();
@@ -483,6 +694,10 @@ fn stop_escalates_to_kill_for_a_process_that_ignores_termination() {
     runtime
         .start(&unchecked_config("{}"))
         .expect("stubborn runtime should start");
+    directory.wait_for_marker("run-ignore-term-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    assert_process_alive(leader_pid);
+    assert_process_group_alive(leader_pid);
 
     let started = Instant::now();
     assert_eq!(
@@ -490,6 +705,8 @@ fn stop_escalates_to_kill_for_a_process_that_ignores_termination() {
         RuntimeState::Stopped { generation: 1 }
     );
     assert!(started.elapsed() < Duration::from_secs(1));
+    assert_process_gone(leader_pid);
+    assert_process_group_gone(leader_pid);
     assert!(directory.runtime_config_files().is_empty());
 }
 
@@ -497,7 +714,7 @@ fn stop_escalates_to_kill_for_a_process_that_ignores_termination() {
 fn stop_kills_term_ignoring_descendant_after_leader_exits() {
     let directory = TestDirectory::new("run_leader_exits_descendant_ignores_term");
     let mut options = directory.options();
-    options.stop_timeout = Duration::from_millis(100);
+    options.stop_timeout = Duration::from_secs(2);
     let runtime = SingBoxRuntime::new(options).expect("runtime should initialize");
     runtime
         .start(&unchecked_config("{}"))
@@ -505,13 +722,22 @@ fn stop_kills_term_ignoring_descendant_after_leader_exits() {
     directory.wait_for_marker("group-cleanup-ready");
     let leader_pid = directory.recorded_pid("last-pid");
     let descendant_pid = directory.recorded_pid("descendant-pid");
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
 
+    let started = Instant::now();
     assert_eq!(
         runtime.stop().expect("process group stop should succeed"),
         RuntimeState::Stopped { generation: 1 }
     );
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "leader exit should trigger immediate residual-group cleanup"
+    );
     assert_process_gone(leader_pid);
     assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
     assert!(directory.runtime_config_files().is_empty());
 }
 
@@ -694,10 +920,14 @@ fn drop_kills_term_ignoring_descendant_after_leader_exits() {
         directory.wait_for_marker("group-cleanup-ready");
         leader_pid = directory.recorded_pid("last-pid");
         descendant_pid = directory.recorded_pid("descendant-pid");
+        assert_process_alive(leader_pid);
+        assert_process_alive(descendant_pid);
+        assert_process_group_alive(leader_pid);
     }
 
     assert_process_gone(leader_pid);
     assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
     assert!(directory.runtime_config_files().is_empty());
 }
 
@@ -728,6 +958,7 @@ fn concurrent_same_config_start_is_linearizable_and_spawns_once() {
         .expect("both idempotent starts should succeed");
 
     assert_eq!(states[0], states[1]);
+    directory.wait_for_marker("run-ready");
     assert_eq!(
         directory
             .argv_log()

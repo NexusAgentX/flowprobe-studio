@@ -77,8 +77,37 @@ pub struct SingBoxRuntime {
 
 struct ManagedState {
     runtime_state: RuntimeState,
-    child: Option<Child>,
+    child: Option<ManagedChild>,
     active_config: Option<ManagedConfig>,
+}
+
+struct ManagedChild {
+    child: Child,
+    #[cfg(unix)]
+    process_group: Pid,
+}
+
+impl ManagedChild {
+    fn new(child: Child, operation: RuntimeOperation) -> RuntimeResult<Self> {
+        #[cfg(unix)]
+        let process_group = match i32::try_from(child.id()) {
+            Ok(process_group) => Pid::from_raw(process_group),
+            Err(_) => {
+                let mut child = child;
+                let _kill_result = child.kill();
+                let _wait_result = child.wait();
+                return Err(RuntimeError::InternalState { operation });
+            }
+        };
+        #[cfg(not(unix))]
+        let _ = operation;
+
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            process_group,
+        })
+    }
 }
 
 struct ManagedConfig {
@@ -114,31 +143,34 @@ impl Drop for ManagedConfig {
 }
 
 struct ChildGuard {
-    child: Option<Child>,
+    child: Option<ManagedChild>,
     operation: RuntimeOperation,
     stop_timeout: Duration,
 }
 
 impl ChildGuard {
-    fn new(child: Child, operation: RuntimeOperation, stop_timeout: Duration) -> Self {
-        Self {
-            child: Some(child),
+    fn new(
+        child: Child,
+        operation: RuntimeOperation,
+        stop_timeout: Duration,
+    ) -> RuntimeResult<Self> {
+        Ok(Self {
+            child: Some(ManagedChild::new(child, operation)?),
             operation,
             stop_timeout,
-        }
-    }
-
-    fn child_mut(&mut self) -> RuntimeResult<&mut Child> {
-        self.child.as_mut().ok_or(RuntimeError::InternalState {
-            operation: self.operation,
         })
     }
 
-    fn disarm(&mut self) {
-        self.child = None;
+    fn child_mut(&mut self) -> RuntimeResult<&mut Child> {
+        self.child
+            .as_mut()
+            .map(|managed| &mut managed.child)
+            .ok_or(RuntimeError::InternalState {
+                operation: self.operation,
+            })
     }
 
-    fn into_child(mut self) -> RuntimeResult<Child> {
+    fn into_managed_child(mut self) -> RuntimeResult<ManagedChild> {
         self.child.take().ok_or(RuntimeError::InternalState {
             operation: self.operation,
         })
@@ -146,7 +178,7 @@ impl ChildGuard {
 
     fn terminate(&mut self) -> RuntimeResult<()> {
         if let Some(child) = self.child.as_mut() {
-            terminate_child(child, self.operation, self.stop_timeout)?;
+            terminate_managed_child(child, self.operation, self.stop_timeout)?;
             self.child = None;
         }
         Ok(())
@@ -310,16 +342,21 @@ impl SingBoxRuntime {
         result
     }
 
-    fn refresh_locked(state: &mut ManagedState, operation: RuntimeOperation) -> RuntimeResult<()> {
+    fn refresh_locked(
+        &self,
+        state: &mut ManagedState,
+        operation: RuntimeOperation,
+    ) -> RuntimeResult<()> {
         let Some(child) = state.child.as_mut() else {
             if state.runtime_state.phase() != RuntimePhase::Running {
                 cleanup_active_config(state, operation)?;
             }
             return Ok(());
         };
-        match child.try_wait() {
+        match child.child.try_wait() {
             Ok(None) => Ok(()),
             Ok(Some(status)) => {
+                terminate_managed_child(child, operation, self.stop_timeout)?;
                 let generation = state.runtime_state.generation();
                 state.child = None;
                 state.runtime_state = RuntimeState::Crashed {
@@ -378,7 +415,7 @@ impl NetworkRuntime for SingBoxRuntime {
 
     fn start(&self, config: &CompiledConfig) -> RuntimeResult<RuntimeState> {
         let mut state = self.lock(RuntimeOperation::Start)?;
-        Self::refresh_locked(&mut state, RuntimeOperation::Start)?;
+        self.refresh_locked(&mut state, RuntimeOperation::Start)?;
         if state.runtime_state.phase() == RuntimePhase::Running {
             if state
                 .active_config
@@ -406,7 +443,13 @@ impl NetworkRuntime for SingBoxRuntime {
                 return Err(unavailable_for_io(RuntimeOperation::Start, &error));
             }
         };
-        let mut child = ChildGuard::new(child, RuntimeOperation::Start, self.stop_timeout);
+        let mut child = match ChildGuard::new(child, RuntimeOperation::Start, self.stop_timeout) {
+            Ok(child) => child,
+            Err(error) => {
+                managed_config.cleanup(RuntimeOperation::Start)?;
+                return Err(error);
+            }
+        };
         let startup_result = wait_until(
             child.child_mut()?,
             self.startup_probe_duration,
@@ -415,12 +458,13 @@ impl NetworkRuntime for SingBoxRuntime {
         let startup_status = match startup_result {
             Ok(status) => status,
             Err(error) => {
+                child.terminate()?;
                 managed_config.cleanup(RuntimeOperation::Start)?;
                 return Err(error);
             }
         };
         if let Some(status) = startup_status {
-            child.disarm();
+            child.terminate()?;
             managed_config.cleanup(RuntimeOperation::Start)?;
             return Err(RuntimeError::ProcessExited {
                 operation: RuntimeOperation::Start,
@@ -437,7 +481,7 @@ impl NetworkRuntime for SingBoxRuntime {
                     operation: RuntimeOperation::Start,
                 })?;
         let process_id = child.child_mut()?.id();
-        state.child = Some(child.into_child()?);
+        state.child = Some(child.into_managed_child()?);
         state.active_config = Some(managed_config);
         state.runtime_state = RuntimeState::Running {
             generation,
@@ -448,14 +492,16 @@ impl NetworkRuntime for SingBoxRuntime {
 
     fn stop(&self) -> RuntimeResult<RuntimeState> {
         let mut state = self.lock(RuntimeOperation::Stop)?;
-        Self::refresh_locked(&mut state, RuntimeOperation::Stop)?;
+        self.refresh_locked(&mut state, RuntimeOperation::Stop)?;
         let generation = state.runtime_state.generation();
         let Some(mut child) = state.child.take() else {
             state.runtime_state = RuntimeState::Stopped { generation };
             cleanup_active_config(&mut state, RuntimeOperation::Stop)?;
             return Ok(state.runtime_state.clone());
         };
-        if let Err(error) = terminate_child(&mut child, RuntimeOperation::Stop, self.stop_timeout) {
+        if let Err(error) =
+            terminate_managed_child(&mut child, RuntimeOperation::Stop, self.stop_timeout)
+        {
             state.child = Some(child);
             return Err(error);
         }
@@ -466,13 +512,13 @@ impl NetworkRuntime for SingBoxRuntime {
 
     fn health(&self) -> RuntimeResult<RuntimeHealth> {
         let mut state = self.lock(RuntimeOperation::Health)?;
-        Self::refresh_locked(&mut state, RuntimeOperation::Health)?;
+        self.refresh_locked(&mut state, RuntimeOperation::Health)?;
         Ok(health_for_state(&state.runtime_state))
     }
 
     fn state(&self) -> RuntimeResult<RuntimeState> {
         let mut state = self.lock(RuntimeOperation::State)?;
-        Self::refresh_locked(&mut state, RuntimeOperation::State)?;
+        self.refresh_locked(&mut state, RuntimeOperation::State)?;
         Ok(state.runtime_state.clone())
     }
 
@@ -538,7 +584,7 @@ impl NetworkRuntime for SingBoxRuntime {
 
     fn status(&self) -> RuntimeResult<RuntimeStatus> {
         let mut state = self.lock(RuntimeOperation::Status)?;
-        Self::refresh_locked(&mut state, RuntimeOperation::Status)?;
+        self.refresh_locked(&mut state, RuntimeOperation::Status)?;
         Ok(RuntimeStatus {
             state: state.runtime_state.clone(),
             health: health_for_state(&state.runtime_state),
@@ -561,12 +607,15 @@ impl Drop for SingBoxRuntime {
         let Ok(state) = self.state.get_mut() else {
             return;
         };
-        if let Some(mut child) = state.child.take() {
-            let _termination_result =
-                terminate_child(&mut child, RuntimeOperation::Stop, self.stop_timeout);
-        }
-        if let Some(config) = state.active_config.as_mut() {
-            let _cleanup_result = config.cleanup(RuntimeOperation::Stop);
+        let process_group_gone = state.child.take().is_none_or(|mut child| {
+            terminate_managed_child(&mut child, RuntimeOperation::Stop, self.stop_timeout).is_ok()
+        });
+        if process_group_gone {
+            if let Some(config) = state.active_config.as_mut() {
+                let _cleanup_result = config.cleanup(RuntimeOperation::Stop);
+            }
+        } else if let Some(config) = state.active_config.take() {
+            std::mem::forget(config);
         }
         state.active_config = None;
     }
@@ -683,17 +732,24 @@ fn run_status_command(
     let child = command
         .spawn()
         .map_err(|error| unavailable_for_io(operation, &error))?;
-    let mut child = ChildGuard::new(child, operation, stop_timeout);
-    if let Some(status) = wait_until(child.child_mut()?, timeout, operation)? {
-        child.disarm();
-        return Ok(status);
-    }
-    let timeout_error = RuntimeError::TimedOut {
-        operation,
-        timeout_ms: duration_millis(timeout, operation)?,
+    let mut child = ChildGuard::new(child, operation, stop_timeout)?;
+    let status = match wait_until(child.child_mut()?, timeout, operation) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            let timeout_error = RuntimeError::TimedOut {
+                operation,
+                timeout_ms: duration_millis(timeout, operation)?,
+            };
+            child.terminate()?;
+            return Err(timeout_error);
+        }
+        Err(error) => {
+            child.terminate()?;
+            return Err(error);
+        }
     };
     child.terminate()?;
-    Err(timeout_error)
+    Ok(status)
 }
 
 fn run_bounded_output_command(
@@ -706,7 +762,7 @@ fn run_bounded_output_command(
     let child = command
         .spawn()
         .map_err(|error| unavailable_for_io(operation, &error))?;
-    let mut child = ChildGuard::new(child, operation, stop_timeout);
+    let mut child = ChildGuard::new(child, operation, stop_timeout)?;
     let stdout = child
         .child_mut()?
         .stdout
@@ -730,9 +786,9 @@ fn run_bounded_output_command(
         .map_err(|error| process_io(operation, &error))?;
 
     let started = Instant::now();
-    let status = match wait_until(child.child_mut()?, timeout, operation)? {
-        Some(status) => status,
-        None => {
+    let status = match wait_until(child.child_mut()?, timeout, operation) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
             let timeout_error = RuntimeError::TimedOut {
                 operation,
                 timeout_ms: duration_millis(timeout, operation)?,
@@ -740,24 +796,25 @@ fn run_bounded_output_command(
             child.terminate()?;
             return Err(timeout_error);
         }
+        Err(error) => {
+            child.terminate()?;
+            return Err(error);
+        }
     };
+    child.terminate()?;
     let remaining = timeout.saturating_sub(started.elapsed());
     let bytes = match receiver.recv_timeout(remaining) {
         Ok(result) => result.map_err(|error| process_io(operation, &error))?,
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            force_remaining_process_group(child.child_mut()?, operation)?;
-            child.disarm();
             return Err(RuntimeError::TimedOut {
                 operation,
                 timeout_ms: duration_millis(timeout, operation)?,
             });
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            child.disarm();
             return Err(RuntimeError::InternalState { operation });
         }
     };
-    child.disarm();
     if bytes.len() > limit {
         return Err(RuntimeError::OutputLimitExceeded { operation, limit });
     }
@@ -787,48 +844,67 @@ fn wait_until(
 }
 
 #[cfg(unix)]
-fn terminate_child(
-    child: &mut Child,
+fn terminate_managed_child(
+    managed: &mut ManagedChild,
     operation: RuntimeOperation,
     timeout: Duration,
 ) -> RuntimeResult<()> {
-    let process_group = process_group_id(child, operation)?;
-    let mut leader_reaped = child
+    let process_group = managed.process_group;
+    let mut leader_reaped = managed
+        .child
         .try_wait()
         .map_err(|error| process_io(operation, &error))?
         .is_some();
-
     let started = Instant::now();
-    signal_process_group(process_group, operation, Signal::SIGTERM)?;
     let graceful_timeout = timeout / 2;
-    leader_reaped |= reap_leader_through_grace(child, graceful_timeout, operation)?;
+    let mut group_alive = process_group_is_alive(process_group, operation)?;
+    let mut kill_sent = false;
 
-    // The leader can exit promptly on SIGTERM while a descendant in the same
-    // process group ignores it. Always escalate the original process group
-    // after the grace period instead of treating the leader's exit as proof
-    // that the whole managed runtime stopped.
-    signal_process_group(process_group, operation, Signal::SIGKILL)?;
     if leader_reaped {
-        return Ok(());
+        if group_alive {
+            signal_process_group(process_group, operation, Signal::SIGKILL)?;
+            kill_sent = true;
+        }
+    } else if group_alive {
+        signal_process_group(process_group, operation, Signal::SIGTERM)?;
     }
 
-    let remaining = timeout.saturating_sub(started.elapsed());
-    if wait_until(child, remaining, operation)?.is_some() {
-        Ok(())
-    } else {
-        Err(RuntimeError::TimedOut {
-            operation,
-            timeout_ms: duration_millis(timeout, operation)?,
-        })
+    loop {
+        if !leader_reaped {
+            leader_reaped = managed
+                .child
+                .try_wait()
+                .map_err(|error| process_io(operation, &error))?
+                .is_some();
+        }
+        group_alive = process_group_is_alive(process_group, operation)?;
+        if leader_reaped && !group_alive {
+            return Ok(());
+        }
+
+        let elapsed = started.elapsed();
+        if !kill_sent && group_alive && (leader_reaped || elapsed >= graceful_timeout) {
+            signal_process_group(process_group, operation, Signal::SIGKILL)?;
+            kill_sent = true;
+            continue;
+        }
+        if elapsed >= timeout {
+            return Err(RuntimeError::TimedOut {
+                operation,
+                timeout_ms: duration_millis(timeout, operation)?,
+            });
+        }
+        thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
 
 #[cfg(not(unix))]
-fn terminate_child(
-    child: &mut Child,
+fn terminate_managed_child(
+    managed: &mut ManagedChild,
     operation: RuntimeOperation,
     timeout: Duration,
 ) -> RuntimeResult<()> {
+    let child = &mut managed.child;
     if child
         .try_wait()
         .map_err(|error| process_io(operation, &error))?
@@ -850,29 +926,6 @@ fn terminate_child(
     }
 }
 
-#[cfg(unix)]
-fn reap_leader_through_grace(
-    child: &mut Child,
-    timeout: Duration,
-    operation: RuntimeOperation,
-) -> RuntimeResult<bool> {
-    let started = Instant::now();
-    let mut leader_reaped = false;
-    loop {
-        if !leader_reaped {
-            leader_reaped = child
-                .try_wait()
-                .map_err(|error| process_io(operation, &error))?
-                .is_some();
-        }
-        let elapsed = started.elapsed();
-        if elapsed >= timeout {
-            return Ok(leader_reaped);
-        }
-        thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
-    }
-}
-
 fn cleanup_active_config(
     state: &mut ManagedState,
     operation: RuntimeOperation,
@@ -883,13 +936,6 @@ fn cleanup_active_config(
     config.cleanup(operation)?;
     state.active_config = None;
     Ok(())
-}
-
-#[cfg(unix)]
-fn process_group_id(child: &Child, operation: RuntimeOperation) -> RuntimeResult<Pid> {
-    let process_id =
-        i32::try_from(child.id()).map_err(|_| RuntimeError::InternalState { operation })?;
-    Ok(Pid::from_raw(process_id))
 }
 
 #[cfg(unix)]
@@ -912,25 +958,15 @@ fn signal_process_group(
 }
 
 #[cfg(unix)]
-fn signal_child_process_group(
-    child: &Child,
-    operation: RuntimeOperation,
-    signal: Signal,
-) -> RuntimeResult<()> {
-    signal_process_group(process_group_id(child, operation)?, operation, signal)
-}
-
-#[cfg(unix)]
-fn force_remaining_process_group(child: &Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    signal_child_process_group(child, operation, Signal::SIGKILL)
-}
-
-#[cfg(not(unix))]
-fn force_remaining_process_group(
-    _child: &Child,
-    _operation: RuntimeOperation,
-) -> RuntimeResult<()> {
-    Ok(())
+fn process_group_is_alive(process_group: Pid, operation: RuntimeOperation) -> RuntimeResult<bool> {
+    match killpg(process_group, None) {
+        Ok(()) | Err(Errno::EPERM) => Ok(true),
+        Err(Errno::ESRCH) => Ok(false),
+        Err(_) => Err(RuntimeError::ProcessIo {
+            operation,
+            kind: ProcessIoKind::Other,
+        }),
+    }
 }
 
 fn duration_millis(duration: Duration, operation: RuntimeOperation) -> RuntimeResult<u64> {
