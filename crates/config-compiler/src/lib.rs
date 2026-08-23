@@ -46,7 +46,6 @@ pub enum DiagnosticCode {
     DuplicateObjectKey,
     ReservedNamespace,
     ProtectedObjectReplacement,
-    IdentityConflict,
     DuplicateTag,
     InvalidStructure,
     RuntimeValidationRejected,
@@ -219,7 +218,7 @@ config_layer!(
 config_layer!(
     UserProfile,
     ConfigLayer::UserProfile,
-    "User-owned ordinary sing-box configuration. Reserved names are rejected."
+    "User-owned ordinary sing-box configuration. Reserved definition keys and tags are rejected."
 );
 config_layer!(
     RuntimeOverlay,
@@ -547,19 +546,19 @@ fn validate_duplicate_tags(
     match value {
         Value::Array(items) => {
             let mut tags = BTreeSet::new();
-            let mut names = BTreeSet::new();
             for (index, item) in items.iter().enumerate() {
-                for (identity_key, identities) in [("tag", &mut tags), ("name", &mut names)] {
-                    if let Some(identity) = item.get(identity_key).and_then(Value::as_str)
-                        && !identities.insert(identity)
-                    {
-                        report.push(Diagnostic::error(
-                            DiagnosticCode::DuplicateTag,
-                            layer,
-                            format!("{path}[{index}].{identity_key}"),
-                            "configuration array contains a duplicate tag or name identity",
-                        ));
-                    }
+                if let Some(identity) = item
+                    .get("tag")
+                    .and_then(Value::as_str)
+                    .filter(|identity| !identity.is_empty())
+                    && !tags.insert(identity)
+                {
+                    report.push(Diagnostic::error(
+                        DiagnosticCode::DuplicateTag,
+                        layer,
+                        format!("{path}[{index}].tag"),
+                        "configuration array contains a duplicate tag identity",
+                    ));
                 }
                 validate_duplicate_tags(item, layer, &format!("{path}[{index}]"), report);
             }
@@ -615,7 +614,7 @@ fn reject_reserved_user_definitions(value: &Value, path: &str, report: &mut Diag
 }
 
 fn is_definition_key(key: &str) -> bool {
-    matches!(key, "name" | "tag")
+    key == "tag"
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -642,7 +641,7 @@ fn merge_value(
     identity_context: bool,
     report: &mut DiagnosticReport,
 ) {
-    if target == incoming {
+    if target == incoming && !is_container(target) {
         return;
     }
 
@@ -687,18 +686,7 @@ fn merge_value(
         }
         (Value::Array(target_items), Value::Array(incoming_items)) => {
             for incoming_item in incoming_items {
-                let matching_index = match resolve_identity_index(target_items, incoming_item) {
-                    Ok(index) => index,
-                    Err(()) => {
-                        report.push(Diagnostic::error(
-                            DiagnosticCode::IdentityConflict,
-                            policy.layer(),
-                            path,
-                            "tag and name identities do not resolve consistently",
-                        ));
-                        continue;
-                    }
-                };
+                let matching_index = resolve_identity_index(target_items, incoming_item);
 
                 if let Some(index) = matching_index {
                     merge_value(
@@ -734,34 +722,8 @@ fn merge_value(
     }
 }
 
-fn resolve_identity_index(
-    target_items: &[Value],
-    incoming_item: &Value,
-) -> Result<Option<usize>, ()> {
-    let tag_index = identity_index(target_items, incoming_item, "tag");
-    let name_index = identity_index(target_items, incoming_item, "name");
-
-    if let (Some(tag_index), Some(name_index)) = (tag_index, name_index)
-        && tag_index != name_index
-    {
-        return Err(());
-    }
-
-    let matching_index = tag_index.or(name_index);
-    if let Some(index) = matching_index {
-        let target_item = &target_items[index];
-        for identity_key in ["tag", "name"] {
-            if let (Some(target_identity), Some(incoming_identity)) = (
-                target_item.get(identity_key),
-                incoming_item.get(identity_key),
-            ) && target_identity != incoming_identity
-            {
-                return Err(());
-            }
-        }
-    }
-
-    Ok(matching_index)
+fn resolve_identity_index(target_items: &[Value], incoming_item: &Value) -> Option<usize> {
+    identity_index(target_items, incoming_item, "tag")
 }
 
 fn identity_index(
@@ -772,22 +734,23 @@ fn identity_index(
     incoming_item
         .get(identity_key)
         .and_then(Value::as_str)
+        .filter(|identity| !identity.is_empty())
         .and_then(|incoming_identity| {
             target_items.iter().position(|target_item| {
-                target_item.get(identity_key).and_then(Value::as_str) == Some(incoming_identity)
+                target_item
+                    .get(identity_key)
+                    .and_then(Value::as_str)
+                    .filter(|identity| !identity.is_empty())
+                    == Some(incoming_identity)
             })
         })
 }
 
 fn has_reserved_identity(value: &Value) -> bool {
-    value.as_object().is_some_and(|object| {
-        ["tag", "name"].into_iter().any(|identity_key| {
-            object
-                .get(identity_key)
-                .and_then(Value::as_str)
-                .is_some_and(|identity| identity.starts_with(RESERVED_PREFIX))
-        })
-    })
+    value
+        .get("tag")
+        .and_then(Value::as_str)
+        .is_some_and(|identity| identity.starts_with(RESERVED_PREFIX))
 }
 
 fn is_container(value: &Value) -> bool {
@@ -909,9 +872,16 @@ fn is_sensitive_key(key: &str) -> bool {
             | "authstr"
             | "authorization"
             | "bearer"
+            | "clientkey"
+            | "clientkeypath"
             | "cookie"
             | "credentials"
             | "key"
+            | "keypath"
+            | "mackey"
+            | "meshpsk"
+            | "meshpskfile"
+            | "obfs"
             | "password"
             | "passwd"
             | "passphrase"

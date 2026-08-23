@@ -143,12 +143,11 @@ fn compilation_is_canonical_and_preserves_ordinary_sing_box_capabilities() {
 }
 
 #[test]
-fn user_reserved_definition_keys_tags_and_nested_names_are_rejected_without_echoing_values() {
+fn user_reserved_definition_keys_and_tags_are_rejected_without_echoing_values() {
     let user = user_profile(
         r#"{
           "__flowprobe_hidden-secret": {"password": "do-not-echo"},
-          "outbounds": [{"type": "direct", "tag": "__flowprobe_collision"}],
-          "experimental": {"nested": {"name": "__flowprobe_named-object"}}
+          "outbounds": [{"type": "direct", "tag": "__flowprobe_collision"}]
         }"#,
     );
 
@@ -162,14 +161,42 @@ fn user_reserved_definition_keys_tags_and_nested_names_are_rejected_without_echo
             && diagnostic.severity() == DiagnosticSeverity::Error
     }));
     let serialized = serde_json::to_string(error.report()).expect("report should serialize");
-    for forbidden in [
-        "hidden-secret",
-        "do-not-echo",
-        "__flowprobe_collision",
-        "__flowprobe_named-object",
-    ] {
+    for forbidden in ["hidden-secret", "do-not-echo", "__flowprobe_collision"] {
         assert!(!serialized.contains(forbidden));
     }
+}
+
+#[test]
+fn protocol_user_names_are_value_data_not_definition_identities() {
+    let user = user_profile(
+        r#"{
+          "inbounds": [{
+            "type": "vmess",
+            "tag": "in",
+            "listen": "127.0.0.1",
+            "listen_port": 12345,
+            "users": [
+              {"name": "same", "uuid": "11111111-1111-4111-8111-111111111111"},
+              {"name": "same", "uuid": "22222222-2222-4222-8222-222222222222"},
+              {"name": "__flowprobe_ordinary_account", "uuid": "33333333-3333-4333-8333-333333333333"}
+            ]
+          }],
+          "outbounds": [{"type": "direct", "tag": "direct"}]
+        }"#,
+    );
+
+    let compiled = ConfigCompiler::new(AcceptingValidator)
+        .compile(&empty_system(), &user, &empty_overlay())
+        .expect("sing-box protocol user names must remain ordinary value data");
+    let compiled: Value =
+        serde_json::from_str(compiled.runtime_json()).expect("compiled JSON should parse");
+    let users = compiled["inbounds"][0]["users"]
+        .as_array()
+        .expect("VMess users should remain an array");
+    assert_eq!(users.len(), 3);
+    assert_eq!(users[0]["name"], "same");
+    assert_eq!(users[1]["name"], "same");
+    assert_eq!(users[2]["name"], "__flowprobe_ordinary_account");
 }
 
 #[test]
@@ -227,11 +254,6 @@ fn reserved_prefix_in_password_comment_and_route_reference_is_not_a_definition()
 fn user_cannot_mutate_a_protected_object_without_repeating_its_identity() {
     let system = system_base(
         r#"{
-          "by_name": {
-            "name": "__flowprobe_internal",
-            "type": "mixed",
-            "listen_port": 0
-          },
           "by_tag": {
             "tag": "__flowprobe_capture",
             "type": "mixed",
@@ -241,9 +263,6 @@ fn user_cannot_mutate_a_protected_object_without_repeating_its_identity() {
     );
 
     for user in [
-        user_profile(r#"{"by_name":{"type":"socks"}}"#),
-        user_profile(r#"{"by_name":{"listen_port":18180}}"#),
-        user_profile(r#"{"by_name":{"future_user_field":true}}"#),
         user_profile(r#"{"by_tag":{"type":"socks"}}"#),
         user_profile(r#"{"by_tag":{"listen_port":18181}}"#),
         user_profile(r#"{"by_tag":{"future_user_field":true}}"#),
@@ -313,7 +332,7 @@ fn user_parent_replacement_and_null_cannot_delete_protected_objects() {
 fn runtime_overlay_preserves_protected_parents_and_allows_matching_object_updates() {
     let system = system_base(
         r#"{
-          "internal": {"name": "__flowprobe_internal", "type": "mixed", "listen_port": 0},
+          "__flowprobe_internal": {"tag": "__flowprobe_internal", "type": "mixed", "listen_port": 0},
           "inbounds": [{"type": "mixed", "tag": "__flowprobe_capture", "listen_port": 0}],
           "outbounds": [{"type": "direct", "tag": "__flowprobe_direct"}],
           "route": {"rules": [{"outbound": "__flowprobe_direct"}]},
@@ -346,7 +365,7 @@ fn runtime_overlay_preserves_protected_parents_and_allows_matching_object_update
             &empty_user_profile(),
             &runtime_overlay(
                 r#"{
-                  "internal": {"name": "__flowprobe_internal", "listen_port": 18180},
+                  "__flowprobe_internal": {"tag": "__flowprobe_internal", "listen_port": 18180},
                   "inbounds": [{
                     "tag": "__flowprobe_capture",
                     "listen_port": 18181,
@@ -358,7 +377,7 @@ fn runtime_overlay_preserves_protected_parents_and_allows_matching_object_update
         .expect("matching identity and ephemeral port updates must be allowed");
     let updated: Value =
         serde_json::from_str(updated.runtime_json()).expect("compiled JSON should parse");
-    assert_eq!(updated["internal"]["listen_port"], 18180);
+    assert_eq!(updated["__flowprobe_internal"]["listen_port"], 18180);
     assert_eq!(updated["inbounds"][0]["listen_port"], 18181);
     assert_eq!(updated["inbounds"][0]["tag"], "__flowprobe_capture");
     assert_eq!(
@@ -392,7 +411,7 @@ fn runtime_overlay_preserves_protected_parents_and_allows_matching_object_update
         .compile(
             &system,
             &empty_user_profile(),
-            &runtime_overlay(r#"{"internal":{"name":"__flowprobe_renamed"}}"#),
+            &runtime_overlay(r#"{"__flowprobe_internal":{"tag":"__flowprobe_renamed"}}"#),
         )
         .expect_err("runtime overlay cannot rename a protected identity");
     assert!(
@@ -405,111 +424,20 @@ fn runtime_overlay_preserves_protected_parents_and_allows_matching_object_update
 }
 
 #[test]
-fn runtime_overlay_matches_name_identities_in_place_and_preserves_protected_identity() {
+fn runtime_overlay_matches_non_empty_tags_and_never_name_values() {
     let system = system_base(
         r#"{
           "services": [
             {
-              "name": "__flowprobe_runtime_service",
+              "tag": "__flowprobe_runtime_service",
+              "name": "ordinary_protocol_value",
               "type": "mixed",
               "listen_port": 0
             },
             {"name": "ordinary_service", "value": 1}
-          ],
-          "inbounds": [{
-            "tag": "__flowprobe_capture",
-            "name": "__flowprobe_original_name",
-            "listen_port": 0
-          }]
-        }"#,
-    );
-    let compiled = ConfigCompiler::new(AcceptingValidator)
-        .compile(
-            &system,
-            &empty_user_profile(),
-            &runtime_overlay(
-                r#"{
-                  "services": [
-                    {"name": "__flowprobe_runtime_service", "listen_port": 18180},
-                    {"name": "ordinary_service", "value": 2}
-                  ]
-                }"#,
-            ),
-        )
-        .expect("runtime objects with matching names must update in place");
-    let compiled: Value =
-        serde_json::from_str(compiled.runtime_json()).expect("compiled JSON should parse");
-    assert_eq!(compiled["services"].as_array().map(Vec::len), Some(2));
-    assert_eq!(compiled["services"][0]["listen_port"], 18180);
-    assert_eq!(compiled["services"][0]["type"], "mixed");
-    assert_eq!(compiled["services"][1]["value"], 2);
-
-    let error = ConfigCompiler::new(AcceptingValidator)
-        .compile(
-            &system,
-            &empty_user_profile(),
-            &runtime_overlay(
-                r#"{
-                  "inbounds": [{
-                    "tag": "__flowprobe_capture",
-                    "name": "__flowprobe_renamed"
-                  }]
-                }"#,
-            ),
-        )
-        .expect_err("runtime matching must not change a protected name identity");
-    assert!(error.report().diagnostics().iter().any(|diagnostic| {
-        diagnostic.code() == DiagnosticCode::IdentityConflict
-            && diagnostic.layer() == ConfigLayer::RuntimeOverlay
-    }));
-}
-
-#[test]
-fn array_identity_resolution_rejects_cross_matches_and_preserves_secondary_identities() {
-    let system = system_base(
-        r#"{
-          "services": [
-            {"tag": "tag_a", "name": "name_a", "value": 1},
-            {"tag": "tag_b", "name": "name_b", "value": 2},
-            {
-              "tag": "__flowprobe_protected_tag",
-              "name": "__flowprobe_protected_name",
-              "value": 3
-            },
-            {"tag": "tag_only", "value": 4},
-            {"tag": "__flowprobe_protected_tag_only", "value": 5}
           ]
         }"#,
     );
-
-    let user_error = ConfigCompiler::new(AcceptingValidator)
-        .compile(
-            &system,
-            &user_profile(r#"{"services":[{"tag":"tag_b","name":"name_a","value":20}]}"#),
-            &empty_overlay(),
-        )
-        .expect_err("user tag/name identities cannot resolve to different target items");
-    assert!(user_error.report().diagnostics().iter().any(|diagnostic| {
-        diagnostic.code() == DiagnosticCode::IdentityConflict
-            && diagnostic.layer() == ConfigLayer::UserProfile
-    }));
-
-    for overlay in [
-        runtime_overlay(r#"{"services":[{"tag":"tag_b","name":"name_a","value":20}]}"#),
-        runtime_overlay(r#"{"services":[{"tag":"tag_a","name":"ordinary_new_name","value":20}]}"#),
-        runtime_overlay(
-            r#"{"services":[{"tag":"__flowprobe_protected_tag","name":"__flowprobe_protected_new_name","value":30}]}"#,
-        ),
-    ] {
-        let error = ConfigCompiler::new(AcceptingValidator)
-            .compile(&system, &empty_user_profile(), &overlay)
-            .expect_err("an existing secondary identity cannot be changed");
-        assert!(error.report().diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == DiagnosticCode::IdentityConflict
-                && diagnostic.layer() == ConfigLayer::RuntimeOverlay
-        }));
-    }
-
     let compiled = ConfigCompiler::new(AcceptingValidator)
         .compile(
             &system,
@@ -517,27 +445,26 @@ fn array_identity_resolution_rejects_cross_matches_and_preserves_secondary_ident
             &runtime_overlay(
                 r#"{
                   "services": [
-                    {"tag": "tag_b", "value": 20},
-                    {"tag": "tag_only", "name": "added_name", "value": 40},
-                    {
-                      "tag": "__flowprobe_protected_tag_only",
-                      "name": "__flowprobe_added_name",
-                      "value": 50
-                    }
+                    {"tag": "__flowprobe_runtime_service", "listen_port": 18180},
+                    {"name": "ordinary_service", "value": 2},
+                    {"name": "__flowprobe_ordinary_value", "value": 3}
                   ]
                 }"#,
             ),
         )
-        .expect("a missing secondary identity may be omitted or added without collision");
+        .expect("only the non-empty tag should identify an array entry");
     let compiled: Value =
         serde_json::from_str(compiled.runtime_json()).expect("compiled JSON should parse");
-    assert_eq!(compiled["services"].as_array().map(Vec::len), Some(5));
-    assert_eq!(compiled["services"][1]["name"], "name_b");
-    assert_eq!(compiled["services"][1]["value"], 20);
-    assert_eq!(compiled["services"][3]["name"], "added_name");
-    assert_eq!(compiled["services"][3]["value"], 40);
-    assert_eq!(compiled["services"][4]["name"], "__flowprobe_added_name");
-    assert_eq!(compiled["services"][4]["value"], 50);
+    assert_eq!(compiled["services"].as_array().map(Vec::len), Some(4));
+    assert_eq!(compiled["services"][0]["listen_port"], 18180);
+    assert_eq!(compiled["services"][0]["type"], "mixed");
+    assert_eq!(compiled["services"][0]["name"], "ordinary_protocol_value");
+    assert_eq!(compiled["services"][1]["value"], 1);
+    assert_eq!(compiled["services"][2]["value"], 2);
+    assert_eq!(
+        compiled["services"][3]["name"],
+        "__flowprobe_ordinary_value"
+    );
 }
 
 #[test]
@@ -630,23 +557,39 @@ fn duplicate_tags_are_rejected_before_runtime_schema_validation() {
             .any(|diagnostic| { diagnostic.code() == DiagnosticCode::DuplicateTag })
     );
 
-    let duplicate_names = runtime_overlay(
-        r#"{
-          "services": [
-            {"name": "same", "port": 1},
-            {"name": "same", "port": 2}
-          ]
-        }"#,
-    );
-    let error = ConfigCompiler::new(AcceptingValidator)
-        .compile(&empty_system(), &empty_user_profile(), &duplicate_names)
-        .expect_err("duplicate names used for array matching must fail");
-    assert!(
-        error
-            .report()
-            .diagnostics()
-            .iter()
-            .any(|diagnostic| { diagnostic.code() == DiagnosticCode::DuplicateTag })
+    let empty_tag_layer = r#"{"outbounds":[{"type":"direct","tag":""}]}"#;
+    let empty_tags = ConfigCompiler::new(AcceptingValidator)
+        .compile(
+            &system_base(empty_tag_layer),
+            &empty_user_profile(),
+            &runtime_overlay(empty_tag_layer),
+        )
+        .expect("identical parent objects must not make empty tags act as identities");
+    let empty_tags: Value =
+        serde_json::from_str(empty_tags.runtime_json()).expect("compiled JSON should parse");
+    assert_eq!(empty_tags["outbounds"].as_array().map(Vec::len), Some(2));
+
+    let tagged_parent = r#"{
+      "inbounds": [{
+        "type":"vmess",
+        "tag":"__flowprobe_capture",
+        "users":[{"name":"same","uuid":"11111111-1111-4111-8111-111111111111"}]
+      }]
+    }"#;
+    let nested_values = ConfigCompiler::new(AcceptingValidator)
+        .compile(
+            &system_base(tagged_parent),
+            &empty_user_profile(),
+            &runtime_overlay(tagged_parent),
+        )
+        .expect("untagged nested arrays must append even under an identical tagged object");
+    let nested_values: Value =
+        serde_json::from_str(nested_values.runtime_json()).expect("compiled JSON should parse");
+    assert_eq!(
+        nested_values["inbounds"][0]["users"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
     );
 }
 
@@ -683,10 +626,17 @@ fn display_and_debug_forms_redact_nested_credentials_headers_and_uri_secrets() {
             "password": "proxy-password",
             "uuid": "11111111-2222-3333-4444-555555555555",
             "tls": {
+              "client_key": "client-private-secret",
+              "client_key_path": "/secret/client-key.pem",
+              "key_path": "/secret/server-key.pem",
+              "mac_key": "acme-hmac-secret",
               "private_key": "private-key-material",
               "pre_shared_key": "pre-shared-key-material",
               "public_key": "public-key-material"
             },
+            "obfs": "hysteria-obfs-secret",
+            "mesh_psk": "derp-mesh-secret",
+            "mesh_psk_file": "/secret/mesh-psk",
             "auth_str": "auth-string-secret",
             "secret_access_key": "access-key-secret",
             "token_endpoint": "https://auth.example/token",
@@ -742,6 +692,13 @@ fn display_and_debug_forms_redact_nested_credentials_headers_and_uri_secrets() {
         "encodedA%2EencodedB%2EencodedC",
         "private-key-material",
         "pre-shared-key-material",
+        "client-private-secret",
+        "/secret/client-key.pem",
+        "/secret/server-key.pem",
+        "acme-hmac-secret",
+        "hysteria-obfs-secret",
+        "derp-mesh-secret",
+        "/secret/mesh-psk",
         "auth-string-secret",
         "relative-query-token",
         "fragment-token",
