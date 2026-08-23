@@ -26,6 +26,9 @@ and short-lived CLI commands return only after the leader is reaped and the
 original process group is gone, or return a typed error while cleanup ownership
 remains in managed state or transfers with the child, original group identity,
 and private configuration to the adapter's single bounded cleanup worker.
+After `SIGKILL`, ordinary cleanup receives a fixed bounded reap/liveness window;
+sub-poll cleanup budgets transfer ownership promptly instead of pretending the
+group is gone.
 Cleanup ownership is reserved before spawn; at
 capacity, a command is rejected before a child exists. The worker retains at
 most 64 cleanup permits, retries without creating a thread per failure, removes

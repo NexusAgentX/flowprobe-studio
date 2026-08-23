@@ -36,6 +36,7 @@ const MAX_ALLOWED_VERSION_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_ALLOWED_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ALLOWED_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const POST_SIGKILL_REAP_TIMEOUT: Duration = Duration::from_millis(250);
 const CLEANUP_REAPER_CAPACITY: usize = 64;
 const CLEANUP_REAPER_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -1130,14 +1131,23 @@ fn terminate_managed_child(
         .is_some();
     let started = Instant::now();
     let graceful_timeout = timeout / 2;
+    // Sub-poll budgets hand ownership off promptly; ordinary stops get a fixed
+    // scheduler-independent window to reap the leader and observe PGID removal.
+    let post_kill_timeout = if timeout < POLL_INTERVAL {
+        timeout
+    } else {
+        POST_SIGKILL_REAP_TIMEOUT
+    };
     let mut group_alive = process_group_is_alive(process_group, operation)?;
     let mut kill_sent = false;
+    let mut kill_started = None;
 
     if leader_reaped {
         if group_alive {
             signal_process_group(process_group, operation, Signal::SIGKILL)?;
             kill_sent = true;
-            if started.elapsed() >= timeout {
+            kill_started = Some(Instant::now());
+            if post_kill_timeout.is_zero() {
                 return Err(termination_timeout(operation, timeout)?);
             }
         }
@@ -1162,15 +1172,24 @@ fn terminate_managed_child(
         if !kill_sent && group_alive && (leader_reaped || elapsed >= graceful_timeout) {
             signal_process_group(process_group, operation, Signal::SIGKILL)?;
             kill_sent = true;
-            if started.elapsed() >= timeout {
+            kill_started = Some(Instant::now());
+            if post_kill_timeout.is_zero() {
                 return Err(termination_timeout(operation, timeout)?);
             }
             continue;
         }
-        if elapsed >= timeout {
-            return Err(termination_timeout(operation, timeout)?);
+        if let Some(kill_started) = kill_started {
+            let kill_elapsed = kill_started.elapsed();
+            if kill_elapsed >= post_kill_timeout {
+                return Err(termination_timeout(operation, timeout)?);
+            }
+            thread::sleep(POLL_INTERVAL.min(post_kill_timeout.saturating_sub(kill_elapsed)));
+        } else {
+            if elapsed >= timeout {
+                return Err(termination_timeout(operation, timeout)?);
+            }
+            thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
         }
-        thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
 
