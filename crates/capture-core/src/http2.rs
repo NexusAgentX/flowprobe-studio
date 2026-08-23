@@ -189,6 +189,11 @@ fn decode_direction(
                 }
             }
             4 => validate_settings_frame(stream_id, flags, payload)?,
+            5 => {
+                return Err(CaptureError::UnsupportedHttp2(
+                    "PUSH_PROMISE in the minimum v0 path",
+                ));
+            }
             9 => {
                 return Err(CaptureError::UnsupportedHttp2(
                     "standalone CONTINUATION frame",
@@ -389,6 +394,20 @@ fn push_header(
     {
         return Err(CaptureError::MalformedHttp2("invalid HTTP/2 header name"));
     }
+    if value
+        .iter()
+        .any(|byte| !matches!(byte, b'\t' | b' ' | 0x21..=0x7e | 0x80..=0xff))
+        || value
+            .first()
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        || value
+            .last()
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return Err(CaptureError::MalformedHttp2(
+            "invalid HTTP/2 header field value",
+        ));
+    }
     if name.starts_with(b":") {
         let known_for_side = match side {
             HttpSide::Request => matches!(
@@ -408,6 +427,20 @@ fn push_header(
             ));
         }
     } else {
+        if matches!(
+            name.as_slice(),
+            b"connection" | b"proxy-connection" | b"keep-alive" | b"transfer-encoding" | b"upgrade"
+        ) {
+            return Err(CaptureError::MalformedHttp2(
+                "connection-specific header field is forbidden in HTTP/2",
+            ));
+        }
+        if name == b"te" && (side != HttpSide::Request || !value.eq_ignore_ascii_case(b"trailers"))
+        {
+            return Err(CaptureError::MalformedHttp2(
+                "HTTP/2 te header field is not a request value of trailers",
+            ));
+        }
         *regular_header_seen = true;
     }
     *decoded_bytes = decoded_bytes
@@ -512,9 +545,17 @@ fn request_metadata(
     byte_count: u64,
 ) -> Result<HttpRequestMetadata, CaptureError> {
     let method = required_unique_text(fields, b":method", HttpSide::Request, "method")?;
+    if !method.bytes().all(is_http_token_byte) {
+        return Err(CaptureError::MalformedHttp2("invalid request method"));
+    }
     if method == "CONNECT" {
         return Err(CaptureError::UnsupportedHttp2(
             "CONNECT request in the minimum v0 path",
+        ));
+    }
+    if fields.iter().any(|header| header.name == b":protocol") {
+        return Err(CaptureError::MalformedHttp2(
+            ":protocol is only valid for an extended CONNECT request",
         ));
     }
     let path = required_unique_text(fields, b":path", HttpSide::Request, "path")?;
@@ -549,6 +590,9 @@ fn response_metadata(
     request_method: &str,
 ) -> Result<HttpResponseMetadata, CaptureError> {
     let status = required_unique_text(fields, b":status", HttpSide::Response, "status")?;
+    if status.len() != 3 || !status.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(CaptureError::MalformedHttp2("invalid response status"));
+    }
     let status = status
         .parse::<u16>()
         .map_err(|_| CaptureError::MalformedHttp2("invalid response status"))?;
@@ -648,6 +692,27 @@ fn read_u24(bytes: &[u8]) -> usize {
 fn is_h2_name_byte(byte: u8) -> bool {
     byte.is_ascii_lowercase()
         || byte.is_ascii_digit()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
         || matches!(
             byte,
             b'!' | b'#'

@@ -687,6 +687,162 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
 }
 
 #[test]
+fn http2_field_semantics_and_push_promise_are_enforced() {
+    let valid_headers = [
+        0x82, 0x87, 0x84, 0x01, 0x0c, b'f', b'i', b'x', b't', b'u', b'r', b'e', b'.', b't', b'e',
+        b's', b't',
+    ];
+
+    for (suffix, value) in [
+        ("nul", b"a\0b".as_slice()),
+        ("crlf", b"a\r\nb".as_slice()),
+        ("other_control", b"a\x01b".as_slice()),
+        ("delete", b"a\x7fb".as_slice()),
+        ("leading_space", b" value".as_slice()),
+        ("trailing_tab", b"value\t".as_slice()),
+    ] {
+        let mut headers = valid_headers.to_vec();
+        headers.extend(hpack_literal(b"x-test", value));
+        let request = h2_request(1, 0x05, &headers, None);
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_field_value_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+    }
+
+    for (suffix, name, value) in [
+        (
+            "connection",
+            b"connection".as_slice(),
+            b"keep-alive".as_slice(),
+        ),
+        (
+            "proxy_connection",
+            b"proxy-connection".as_slice(),
+            b"keep-alive".as_slice(),
+        ),
+        (
+            "keep_alive",
+            b"keep-alive".as_slice(),
+            b"timeout=5".as_slice(),
+        ),
+        (
+            "transfer_encoding",
+            b"transfer-encoding".as_slice(),
+            b"chunked".as_slice(),
+        ),
+        ("upgrade", b"upgrade".as_slice(), b"websocket".as_slice()),
+        ("te", b"te".as_slice(), b"gzip".as_slice()),
+    ] {
+        let mut headers = valid_headers.to_vec();
+        headers.extend(hpack_literal(name, value));
+        let request = h2_request(1, 0x05, &headers, None);
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_forbidden_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+    }
+
+    let mut trailers_headers = valid_headers.to_vec();
+    trailers_headers.extend(hpack_literal(b"te", b"Trailers"));
+    let trailers_request = h2_request(1, 0x05, &trailers_headers, None);
+    CaptureCore::default()
+        .capture(
+            context("h2_te_trailers", 443),
+            DirectionalData {
+                client_to_server: &trailers_request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("te: trailers is the sole HTTP/2 exception");
+
+    for (suffix, method_headers) in [
+        (
+            "method_token",
+            b"\x02\x05GET X\x87\x84\x01\x0cfixture.test".as_slice(),
+        ),
+        (
+            "protocol_without_connect",
+            b"\x82\x87\x84\x01\x0cfixture.test\x00\x09:protocol\x09websocket".as_slice(),
+        ),
+    ] {
+        let request = h2_request(1, 0x05, method_headers, None);
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_invalid_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+    }
+
+    let valid_client = h2_request(1, 0x05, &valid_headers, None);
+    let mut invalid_status_server = h2_frame(4, 0, 0, &[]);
+    invalid_status_server.extend(h2_frame(1, 0x05, 1, b"\x08\x04+200"));
+    let invalid_status = CaptureCore::default().capture(
+        context("h2_invalid_status", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &invalid_status_server,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        invalid_status,
+        Err(CaptureError::MalformedHttp2(_))
+    ));
+
+    let mut te_response_server = h2_frame(4, 0, 0, &[]);
+    let mut te_response_headers = vec![0x88];
+    te_response_headers.extend(hpack_literal(b"te", b"trailers"));
+    te_response_server.extend(h2_frame(1, 0x05, 1, &te_response_headers));
+    let te_response = CaptureCore::default().capture(
+        context("h2_response_te", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &te_response_server,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(te_response, Err(CaptureError::MalformedHttp2(_))));
+
+    let mut push_payload = vec![0, 0, 0, 2];
+    push_payload.extend_from_slice(&valid_headers);
+    let mut push_server = h2_frame(4, 0, 0, &[]);
+    push_server.extend(h2_frame(5, 0x04, 1, &push_payload));
+    push_server.extend(h2_frame(1, 0x05, 1, &[0x88]));
+    let push = CaptureCore::default().capture(
+        context("h2_push_promise", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &push_server,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(push, Err(CaptureError::UnsupportedHttp2(_))));
+}
+
+#[test]
 fn directional_data_debug_reports_only_lengths() {
     let secret = b"Authorization: Bearer must-not-appear\r\n";
     let debug = format!(
@@ -821,6 +977,18 @@ fn h2_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8
     frame.extend_from_slice(&stream_bytes);
     frame.extend_from_slice(payload);
     frame
+}
+
+fn hpack_literal(name: &[u8], value: &[u8]) -> Vec<u8> {
+    assert!(name.len() < 127, "test HPACK name uses one-byte length");
+    assert!(value.len() < 127, "test HPACK value uses one-byte length");
+    let mut field = Vec::with_capacity(3 + name.len() + value.len());
+    field.push(0);
+    field.push(u8::try_from(name.len()).expect("test name length fits u8"));
+    field.extend_from_slice(name);
+    field.push(u8::try_from(value.len()).expect("test value length fits u8"));
+    field.extend_from_slice(value);
+    field
 }
 
 fn http_transaction(flow: &NormalizedFlowV0) -> &flowprobe_model::HttpTransactionMetadata {
