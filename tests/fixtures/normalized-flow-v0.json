@@ -1,0 +1,103 @@
+{
+  "contract_version": "0",
+  "flow_id": "flow_fixture_0001",
+  "connection_id": "connection_fixture_0001",
+  "capture_session_id": "session_fixture_0001",
+  "process": {
+    "process_id": 4242,
+    "executable_name": "fixture-client",
+    "source": "socket_correlation",
+    "confidence": 95,
+    "attribution_platform": "deterministic_fixture"
+  },
+  "timing": {
+    "started_at": 1720000000000000000,
+    "first_byte_at": 1720000000001000000,
+    "ended_at": 1720000000004000000,
+    "clock_domain": "unix_epoch_ns"
+  },
+  "transport": {
+    "protocol": "tcp",
+    "source_ip": "192.0.2.10",
+    "source_port": 53000,
+    "interface_index": 7
+  },
+  "destination": {
+    "host": "fixture.example",
+    "ip": "198.51.100.20",
+    "port": 443,
+    "resolution_source": "fixture"
+  },
+  "protocols": [
+    {
+      "kind": "connection",
+      "metadata": {
+        "client_to_server_bytes": 481,
+        "close_reason": "graceful",
+        "decoder_revision": 1,
+        "server_to_client_bytes": 1024
+      }
+    },
+    {
+      "kind": "tls",
+      "metadata": {
+        "alpn": "h2",
+        "cipher_suite": "TLS_AES_128_GCM_SHA256",
+        "interception_state": "intercepted",
+        "negotiated_version": "TLSv1.3",
+        "sni": "fixture.example"
+      }
+    },
+    {
+      "kind": "http",
+      "metadata": {
+        "request": {
+          "authority": "fixture.example",
+          "body_ref": "body_fixture_request_001",
+          "byte_count": 18,
+          "content_type": "application/json",
+          "method": "POST",
+          "path": "/v1/fixture",
+          "request_priority": "interactive",
+          "scheme": "https",
+          "version": "HTTP/2"
+        },
+        "response": {
+          "body_ref": "body_fixture_response_001",
+          "byte_count": 37,
+          "content_type": "text/event-stream",
+          "status": 200,
+          "version": "HTTP/2"
+        },
+        "stream_id": 1
+      }
+    },
+    {
+      "kind": "stream",
+      "metadata": {
+        "blob_ref": "blob_fixture_stream_001",
+        "byte_count": 13,
+        "direction": "server_to_client",
+        "event_name": "message",
+        "framing": "sse",
+        "relative_at": 2500000,
+        "sequence": 0,
+        "stream_kind": "sse"
+      }
+    },
+    {
+      "kind": "future_datagram_summary",
+      "metadata": {
+        "codec": "future-v1",
+        "metrics": {
+          "datagrams": 3,
+          "dropped": 0
+        }
+      },
+      "producer_revision": 2
+    }
+  ],
+  "trace_correlation": {
+    "source": "golden_fixture"
+  }
+}
