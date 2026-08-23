@@ -6,6 +6,7 @@ members = [
   "crates/config-compiler",
   "crates/ipc",
   "crates/model",
+  "crates/storage",
   "crates/supervisor",
 ]
 
