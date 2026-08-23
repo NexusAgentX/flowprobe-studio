@@ -39,3 +39,56 @@ jobs:
               exit 1
             fi
           fi
+
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          components: clippy,rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check workspace
+        run: cargo check --workspace
+      - name: Test workspace
+        run: cargo test --workspace
+
+  desktop:
+    name: Desktop renderer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint renderer
+        run: pnpm --dir apps/desktop lint
+      - name: Test renderer
+        run: pnpm --dir apps/desktop test
+      - name: Build renderer
+        run: pnpm --dir apps/desktop build

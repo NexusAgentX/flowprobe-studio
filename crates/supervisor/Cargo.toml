@@ -1,0 +1,13 @@
+[package]
+name = "flowprobe-supervisor"
+description = "Non-renderer lifecycle boundary for FlowProbe Studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+flowprobe-ipc = { path = "../ipc" }
+
+[lints]
+workspace = true

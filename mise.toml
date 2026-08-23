@@ -1,0 +1,41 @@
+[tools]
+node = "24.19.0"
+pnpm = "11.22.0"
+python = "3.12.14"
+rust = "1.98.0"
+
+[tasks.bootstrap]
+description = "Install locked JavaScript dependencies"
+run = "pnpm install --frozen-lockfile"
+
+[tasks."check:contracts"]
+description = "Validate repository task and anti-shortcut contracts"
+run = [
+  "python scripts/validate_tasks.py",
+  "python scripts/quality_gate.py",
+]
+
+[tasks."check:rust"]
+description = "Format, lint, build, and test the Rust workspace"
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo check --workspace",
+  "cargo test --workspace",
+]
+
+[tasks."check:web"]
+description = "Lint, test, and build the desktop renderer"
+run = [
+  "pnpm --dir apps/desktop lint",
+  "pnpm --dir apps/desktop test",
+  "pnpm --dir apps/desktop build",
+]
+
+[tasks.check]
+description = "Run the complete local foundation quality gate"
+depends = ["check:contracts", "check:rust", "check:web"]
+
+[tasks.dev]
+description = "Run the Tauri desktop shell in development mode"
+run = "pnpm dev"
