@@ -1,0 +1,1 @@
+POST /resource HTTP/1.1\r\nHost: fixture.test\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello

@@ -1,0 +1,15 @@
+[package]
+name = "flowprobe-capture-core"
+description = "Protocol-oriented capture and normalization for FlowProbe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+flowprobe-model = { path = "../model" }
+httparse = "1.10"
+serde_json.workspace = true
+
+[lints]
+workspace = true

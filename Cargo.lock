@@ -744,6 +744,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowprobe-capture-core"
+version = "0.1.0"
+dependencies = [
+ "flowprobe-model",
+ "httparse",
+ "serde_json",
+]
+
+[[package]]
 name = "flowprobe-config-compiler"
 version = "0.1.0"
 dependencies = [
