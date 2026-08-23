@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+
+[package]
+name = "flowprobe-v0-1-integration"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.0"
+publish = false
+autolib = false
+autobins = false
+
+[[test]]
+name = "architecture_proof"
+path = "architecture_proof.rs"
+
+[[bin]]
+name = "flowprobe-v0-1-real-singbox-proof"
+path = "real_singbox_proof.rs"
+test = false
+bench = false
+
+[dependencies]
+flowprobe-analyzer-runtime = { path = "../../../crates/analyzer-runtime" }
+flowprobe-capture-core = { path = "../../../crates/capture-core" }
+flowprobe-config-compiler = { path = "../../../crates/config-compiler" }
+flowprobe-ipc = { path = "../../../crates/ipc" }
+flowprobe-model = { path = "../../../crates/model" }
+flowprobe-runtime-api = { path = "../../../crates/runtime-api" }
+flowprobe-singbox-runtime = { path = "../../../runtime/singbox" }
+flowprobe-storage = { path = "../../../crates/storage" }
+flowprobe-supervisor = { path = "../../../crates/supervisor" }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
