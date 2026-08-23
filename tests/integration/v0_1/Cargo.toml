@@ -14,6 +14,10 @@ autobins = false
 name = "architecture_proof"
 path = "architecture_proof.rs"
 
+[[test]]
+name = "tls_interception_proof"
+path = "tls_interception_proof.rs"
+
 [[bin]]
 name = "flowprobe-v0-1-real-singbox-proof"
 path = "real_singbox_proof.rs"
@@ -30,6 +34,8 @@ flowprobe-runtime-api = { path = "../../../crates/runtime-api" }
 flowprobe-singbox-runtime = { path = "../../../runtime/singbox" }
 flowprobe-storage = { path = "../../../crates/storage" }
 flowprobe-supervisor = { path = "../../../crates/supervisor" }
+rcgen = { version = "0.14.9", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.43", default-features = false, features = ["std", "tls12", "ring"] }
 serde_json = "1"
 
 [lints.rust]

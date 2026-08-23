@@ -9,7 +9,11 @@ publish.workspace = true
 [dependencies]
 flowprobe-model = { path = "../model" }
 httparse = "1.10"
+rcgen.workspace = true
+rustls.workspace = true
 serde_json.workspace = true
+time.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
