@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">FlowProbe Studio development icon</title>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#142b24" />
+      <stop offset="1" stop-color="#24473b" />
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#background)" />
+  <path d="M236 512h128l66-178 135 356 76-178h147" fill="none" stroke="#76dfaf" stroke-linecap="round" stroke-linejoin="round" stroke-width="72" />
+  <circle cx="236" cy="512" r="42" fill="#eef2ef" />
+  <circle cx="788" cy="512" r="42" fill="#eef2ef" />
+</svg>

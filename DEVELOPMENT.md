@@ -4,6 +4,58 @@
 
 FlowProbe is developed as a contract-first system. Repository state is the long-term memory; individual AI conversations are disposable.
 
+## Fresh-checkout bootstrap
+
+The repository pins its local toolchain in `mise.toml` and independently pins Rust for Cargo/CI in `rust-toolchain.toml`.
+
+Prerequisites:
+
+- [mise](https://mise.jdx.dev/) with project configuration enabled;
+- macOS Command Line Tools, or the platform dependencies required by Tauri;
+- Git.
+
+From a fresh checkout:
+
+```sh
+mise trust
+mise install
+mise run bootstrap
+mise run check
+```
+
+`mise run bootstrap` installs exactly the packages in `pnpm-lock.yaml`. It does not install or start sing-box, create a TUN device, install a CA, or change system networking.
+
+Develop the desktop shell with:
+
+```sh
+mise run dev
+```
+
+The renderer development server can also be run without the native shell:
+
+```sh
+pnpm --dir apps/desktop dev
+```
+
+### Direct acceptance commands
+
+The foundation task's contract commands can be run directly after bootstrap:
+
+```sh
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test --workspace
+python scripts/validate_tasks.py
+```
+
+The stronger local/CI gate additionally runs Clippy, the anti-shortcut checker, and desktop lint, tests, and build:
+
+```sh
+mise run check
+```
+
+The initial shell reports Network Runtime, Capture Core, and Analyzer Runtime as `notConfigured`. That is deliberate: their behavior is implemented only by their own task contracts.
+
 ## Normal implementation loop
 
 1. Select exactly one milestone/task contract whose dependencies are satisfied.
