@@ -374,6 +374,79 @@ fn component_and_event_inputs_are_bounded_before_execution() {
 }
 
 #[test]
+fn nondeterministic_or_indefinitely_blocking_wasm_features_are_rejected() {
+    let runtime = AnalyzerRuntime::new(AnalyzerLimits::default()).expect("runtime configuration");
+
+    let relaxed_simd = wat::parse_str(
+        r#"(component
+            (core module
+                (func
+                    (drop
+                        (i8x16.relaxed_swizzle
+                            (v128.const i32x4 0 0 0 0)
+                            (v128.const i32x4 0 0 0 0)
+                        )
+                    )
+                )
+            )
+        )"#,
+    )
+    .expect("structurally valid relaxed-SIMD component");
+    assert_eq!(
+        runtime
+            .compile(&relaxed_simd, AnalyzerPermissions::NONE)
+            .expect_err("relaxed SIMD must be rejected before ABI linking"),
+        AnalyzerError::InvalidComponent
+    );
+
+    let atomic_wait = wat::parse_str(
+        r#"(component
+            (core module
+                (memory 1 1 shared)
+                (func
+                    (drop
+                        (memory.atomic.wait32
+                            (i32.const 0)
+                            (i32.const 0)
+                            (i64.const -1)
+                        )
+                    )
+                )
+            )
+        )"#,
+    )
+    .expect("structurally valid threads component");
+    assert_eq!(
+        runtime
+            .compile(&atomic_wait, AnalyzerPermissions::NONE)
+            .expect_err("atomic wait must be rejected before it can park a host thread"),
+        AnalyzerError::InvalidComponent
+    );
+
+    let ordinary_simd = wat::parse_str(
+        r#"(component
+            (core module
+                (func
+                    (drop
+                        (i8x16.swizzle
+                            (v128.const i32x4 0 0 0 0)
+                            (v128.const i32x4 0 0 0 0)
+                        )
+                    )
+                )
+            )
+        )"#,
+    )
+    .expect("structurally valid ordinary-SIMD component");
+    assert_eq!(
+        runtime
+            .compile(&ordinary_simd, AnalyzerPermissions::NONE)
+            .expect_err("ordinary SIMD should reach the Analyzer ABI check"),
+        AnalyzerError::ContractMismatch
+    );
+}
+
+#[test]
 fn analyzer_metadata_requires_a_bounded_semantic_version() {
     let runtime = AnalyzerRuntime::new(AnalyzerLimits::default()).expect("runtime configuration");
     let analyzer = runtime

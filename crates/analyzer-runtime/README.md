@@ -20,6 +20,13 @@ attributes must be a bounded JSON object and are reserialized in canonical key
 order. Wasmtime details and guest error strings are mapped to typed errors
 without embedding captured traffic or plugin-provided log text.
 
+Analyzer v0.1 keeps ordinary WebAssembly SIMD but disables relaxed SIMD because
+its permitted results can vary across CPU architectures. Wasmtime is also built
+with default features disabled and a narrow feature allowlist that omits its
+`threads` feature; otherwise an untrusted component could execute an indefinite
+atomic wait without consuming fuel. Contract tests require components requesting
+either proposal to be rejected during compilation.
+
 Memory and table growth rejected by the runtime limiter have stable typed
 errors. Wasmtime also enforces the configured counts of core instances, tables,
 and memories during instantiation. Count-limit failures are deliberately

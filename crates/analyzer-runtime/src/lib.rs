@@ -360,6 +360,11 @@ impl AnalyzerRuntime {
         limits.validate()?;
         let mut config = Config::new();
         config.wasm_component_model(true);
+        // Relaxed SIMD permits architecture-dependent results. Analyzer v0.1
+        // does not need it, so reject it before an untrusted component can be
+        // instantiated. The separately tested Wasmtime feature allowlist also
+        // omits its compile-time `threads` feature.
+        config.wasm_relaxed_simd(false);
         config.consume_fuel(true);
         config.cranelift_nan_canonicalization(true);
         let engine = Engine::new(&config).map_err(|_| AnalyzerError::InvalidLimits {
