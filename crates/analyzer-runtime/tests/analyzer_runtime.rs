@@ -205,6 +205,46 @@ fn only_the_exact_versioned_analyzer_interfaces_can_be_imported() {
             .expect_err("wrong WIT version must be rejected"),
         AnalyzerError::UnsupportedContractVersion
     );
+
+    let wrong_exact_import_shape = wat::parse_str(
+        r#"(component
+            (type $wrong-get (func (param "event" string) (result string)))
+            (type $wrong-host (instance
+                (export "get-event-json" (func (type $wrong-get)))
+            ))
+            (import "flowprobe:analyzer/host@0.1.0"
+                (instance (type $wrong-host)))
+        )"#,
+    )
+    .expect("valid exact-name wrong-import-shape component");
+    assert_eq!(
+        runtime
+            .compile(&wrong_exact_import_shape, AnalyzerPermissions::NONE)
+            .expect_err("an exact import name cannot bypass its function shape"),
+        AnalyzerError::ContractMismatch
+    );
+
+    let wrong_export_signature = wat::parse_str(
+        r#"(component
+            (core module $module
+                (func (export "wrong-info"))
+            )
+            (core instance $instance (instantiate $module))
+            (alias core export $instance "wrong-info" (core func $wrong-core-info))
+            (type $wrong-info-type (func))
+            (func $wrong-info (type $wrong-info-type)
+                (canon lift (core func $wrong-core-info)))
+            (export "info" (func $wrong-info))
+        )"#,
+    )
+    .expect("valid wrong-export-signature component");
+    assert_eq!(
+        runtime
+            .compile(&wrong_export_signature, AnalyzerPermissions::NONE)
+            .expect_err("the exact export name still requires its WIT signature"),
+        AnalyzerError::ContractMismatch
+    );
+
     let missing_exports = wat::parse_str("(component)").expect("valid empty component");
     assert_eq!(
         runtime
@@ -251,6 +291,50 @@ fn component_and_event_inputs_are_bounded_before_execution() {
         .expect_err("empty event identity must be rejected");
     assert_eq!(error, AnalyzerError::InvalidEventRef { field: "id" });
     assert_eq!(host.event_reads(), 0);
+
+    let limits = AnalyzerLimits {
+        max_event_id_bytes: 4,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+        .expect("adversarial fixture component");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                EventRef {
+                    id: "identifier-too-long".into(),
+                    kind: "kind".into(),
+                },
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("event id byte limit must be enforced"),
+        AnalyzerError::InvalidEventRef { field: "id" }
+    );
+
+    let limits = AnalyzerLimits {
+        max_event_kind_bytes: 4,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+        .expect("adversarial fixture component");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                EventRef {
+                    id: "id".into(),
+                    kind: "event-kind-too-long".into(),
+                },
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("event kind byte limit must be enforced"),
+        AnalyzerError::InvalidEventRef { field: "kind" }
+    );
 }
 
 #[test]
@@ -267,6 +351,44 @@ fn analyzer_metadata_requires_a_bounded_semantic_version() {
                 RecordingHost::with_event_json("{}")
             )
             .expect_err("invalid analyzer version must be rejected before analyze"),
+        AnalyzerError::InvalidAnalyzerInfo { field: "version" }
+    );
+
+    let limits = AnalyzerLimits {
+        max_analyzer_id_bytes: 4,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::NONE)
+        .expect("adversarial fixture has valid metadata shape");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                fixture_event("fixture.guest-error"),
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("analyzer id byte limit must be enforced"),
+        AnalyzerError::InvalidAnalyzerInfo { field: "id" }
+    );
+
+    let limits = AnalyzerLimits {
+        max_analyzer_version_bytes: 4,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::NONE)
+        .expect("adversarial fixture has valid metadata shape");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                fixture_event("fixture.guest-error"),
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("analyzer version byte limit must be enforced"),
         AnalyzerError::InvalidAnalyzerInfo { field: "version" }
     );
 }
@@ -439,6 +561,48 @@ fn semantic_outputs_are_validated_canonicalized_and_bounded() {
         canonical.semantics()[0].json_attributes,
         r#"{"a":{"x":3,"y":2},"z":1}"#
     );
+
+    for (max_semantic_field_bytes, expected_field) in [(8, "namespace"), (16, "kind")] {
+        let limits = AnalyzerLimits {
+            max_semantic_field_bytes,
+            ..AnalyzerLimits::default()
+        };
+        let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+        let analyzer = runtime
+            .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+            .expect("adversarial fixture component");
+        assert_eq!(
+            runtime
+                .analyze(
+                    &analyzer,
+                    fixture_event("fixture.host-emit-error"),
+                    RecordingHost::with_event_json("{}"),
+                )
+                .expect_err("semantic namespace and kind must honor the field limit"),
+            AnalyzerError::InvalidSemanticEvent {
+                field: expected_field
+            }
+        );
+    }
+
+    let limits = AnalyzerLimits {
+        max_total_semantic_bytes: 24,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+        .expect("adversarial fixture component");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                fixture_event("fixture.host-emit-error"),
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("total semantic byte budget must be enforced"),
+        AnalyzerError::SemanticOutputLimitExceeded
+    );
 }
 
 #[test]
@@ -470,6 +634,58 @@ fn logs_are_bounded_and_host_log_failures_are_typed() {
             .analyze(&analyzer, fixture_event("fixture.host-log-error"), rejected)
             .expect_err("host log failure must remain typed"),
         AnalyzerError::HostCapabilityFailed(HostErrorCode::Unavailable)
+    );
+
+    for limits in [
+        AnalyzerLimits {
+            max_log_level_bytes: 3,
+            ..AnalyzerLimits::default()
+        },
+        AnalyzerLimits {
+            max_log_message_bytes: 8,
+            ..AnalyzerLimits::default()
+        },
+        AnalyzerLimits {
+            max_total_log_bytes: 8,
+            ..AnalyzerLimits::default()
+        },
+    ] {
+        let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+        let analyzer = runtime
+            .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+            .expect("adversarial fixture component");
+        assert_eq!(
+            runtime
+                .analyze(
+                    &analyzer,
+                    fixture_event("fixture.host-log-error"),
+                    RecordingHost::with_event_json("{}"),
+                )
+                .expect_err("log level, message, and total bytes must each be bounded"),
+            AnalyzerError::LogLimitExceeded
+        );
+    }
+}
+
+#[test]
+fn table_element_limit_is_a_typed_public_runtime_failure() {
+    let limits = AnalyzerLimits {
+        max_table_elements: 1,
+        ..AnalyzerLimits::default()
+    };
+    let runtime = AnalyzerRuntime::new(limits).expect("runtime configuration");
+    let analyzer = runtime
+        .compile(ADVERSARIAL_COMPONENT, AnalyzerPermissions::all())
+        .expect("adversarial fixture component");
+    assert_eq!(
+        runtime
+            .analyze(
+                &analyzer,
+                fixture_event("fixture.guest-error"),
+                RecordingHost::with_event_json("{}"),
+            )
+            .expect_err("component table allocation must hit the element limiter"),
+        AnalyzerError::TableLimitExceeded
     );
 }
 

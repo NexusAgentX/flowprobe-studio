@@ -9,38 +9,34 @@ runtime tests prove that each failure remains typed and the host remains usable.
 `artifacts/hostile_info_analyzer.wasm` uses `hostile-info` to prove `info()`
 cannot call real host capabilities before its metadata is validated.
 
-Regenerate the fixture after changing its source:
+The checked-in components are produced only by `verify_artifacts.py`. The
+script builds with the locked dependency graphs in offline mode, disables
+incremental compilation, gives every artifact/feature an independent temporary
+Cargo target directory, and componentizes from a separate temporary target.
+It sets `CARGO_ENCODED_RUSTFLAGS` with stable `--remap-path-prefix` mappings for
+the checkout root, the actual Cargo registry source and Cargo home, and the
+active rustc sysroot. Neither verification nor regeneration leaves `target` or
+temporary build directories in the repository.
+
+Install the pinned target once, then regenerate all four artifacts:
 
 ```sh
 mise exec -- rustup target add wasm32-unknown-unknown
-mise exec -- cargo build \
-  --manifest-path tests/contract/analyzer/guest/Cargo.toml \
-  --target wasm32-unknown-unknown --release
-mise exec -- cargo run -p flowprobe-analyzer-runtime --example componentize -- \
-  tests/contract/analyzer/guest/target/wasm32-unknown-unknown/release/flowprobe_adversarial_analyzer_fixture.wasm \
-  tests/contract/analyzer/artifacts/adversarial_analyzer.wasm
-
-mise exec -- cargo build \
-  --manifest-path tests/contract/analyzer/guest/Cargo.toml \
-  --target wasm32-unknown-unknown --release --features invalid-info
-mise exec -- cargo run -p flowprobe-analyzer-runtime --example componentize -- \
-  tests/contract/analyzer/guest/target/wasm32-unknown-unknown/release/flowprobe_adversarial_analyzer_fixture.wasm \
-  tests/contract/analyzer/artifacts/invalid_info_analyzer.wasm
-
-mise exec -- cargo build \
-  --manifest-path tests/contract/analyzer/guest/Cargo.toml \
-  --target wasm32-unknown-unknown --release --features hostile-info
-mise exec -- cargo run -p flowprobe-analyzer-runtime --example componentize -- \
-  tests/contract/analyzer/guest/target/wasm32-unknown-unknown/release/flowprobe_adversarial_analyzer_fixture.wasm \
-  tests/contract/analyzer/artifacts/hostile_info_analyzer.wasm
+mise exec -- python tests/contract/analyzer/verify_artifacts.py --write
 ```
 
-The WAT contract cases remain inline in the Rust tests so forbidden ambient
-filesystem, network, and process imports and wrong WIT versions are readable in
-review.
-
-After regeneration, verify every checked-in component byte-for-byte:
+Verify every checked-in component byte-for-byte without modifying it:
 
 ```sh
 mise exec -- python tests/contract/analyzer/verify_artifacts.py
 ```
+
+Both modes actively reject a generated or checked-in artifact containing the
+current checkout, home, Cargo home/registry, or rustc sysroot absolute path.
+Reproducibility review should run verification from two real checkout paths and
+two distinct (non-symlink) Cargo homes; matching printed SHA-256 values prove
+that all four component bytes are independent of those local paths.
+
+The WAT contract cases remain inline in the Rust tests so forbidden ambient
+filesystem, network, and process imports, exact-name imports with the wrong
+function shape, wrong exports, and wrong WIT versions are readable in review.
