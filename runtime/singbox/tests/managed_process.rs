@@ -49,6 +49,56 @@ struct ProcessGroupCleanup {
     armed: bool,
 }
 
+#[cfg(target_os = "macos")]
+struct DeleteChildAcl {
+    directory: PathBuf,
+    armed: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl DeleteChildAcl {
+    fn install(directory: &std::path::Path) -> Self {
+        let status = std::process::Command::new("chmod")
+            .arg("+a")
+            .arg("everyone deny delete_child")
+            .arg(directory)
+            .status()
+            .expect("chmod should be available for the ACL regression");
+        assert!(status.success(), "delete-child ACL should be installed");
+        Self {
+            directory: directory.to_owned(),
+            armed: true,
+        }
+    }
+
+    fn restore(mut self) {
+        self.clear()
+            .expect("delete-child ACL should be removed explicitly");
+        self.armed = false;
+    }
+
+    fn clear(&self) -> std::io::Result<()> {
+        let status = std::process::Command::new("chmod")
+            .arg("-N")
+            .arg(&self.directory)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("chmod failed to remove test ACL"))
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DeleteChildAcl {
+    fn drop(&mut self) {
+        if self.armed {
+            let _clear_result = self.clear();
+        }
+    }
+}
+
 impl ProcessGroupCleanup {
     fn new(process_group_id: i32) -> Self {
         Self {
@@ -1092,6 +1142,54 @@ fn run_spawn_failure_cleans_the_already_checked_private_config() {
         runtime.state().expect("state should remain queryable"),
         RuntimeState::Stopped { generation: 0 }
     );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn spawn_failure_cleanup_is_owned_until_acl_recovery_and_releases_capacity() {
+    const CLEANUP_CAPACITY: usize = 64;
+
+    let directory = TestDirectory::new("normal");
+    let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+    let config = unchecked_config("{}");
+    fs::remove_file(&directory.executable)
+        .expect("canonical executable should be removed to force spawn failure");
+    let acl = DeleteChildAcl::install(&directory.state_directory);
+
+    for _ in 0..(CLEANUP_CAPACITY - 1) {
+        assert_eq!(
+            runtime.validate_config(&config),
+            Err(RuntimeError::Unavailable {
+                operation: RuntimeOperation::ValidateConfig,
+                reason: RuntimeUnavailableReason::ExecutableMissing,
+            })
+        );
+    }
+    assert_eq!(
+        <SingBoxRuntime as RuntimeConfigValidator>::validate(&runtime, config.runtime_json()),
+        Err(RuntimeValidationFailure::Unavailable)
+    );
+    assert_eq!(directory.runtime_config_files().len(), CLEANUP_CAPACITY);
+
+    assert_eq!(
+        runtime.validate_config(&config),
+        Err(RuntimeError::Unavailable {
+            operation: RuntimeOperation::ValidateConfig,
+            reason: RuntimeUnavailableReason::Other,
+        })
+    );
+    assert_eq!(directory.runtime_config_files().len(), CLEANUP_CAPACITY);
+
+    acl.restore();
+    assert_runtime_configs_gone(&directory);
+    fs::write(&directory.executable, FAKE_EXECUTABLE)
+        .expect("fake executable should be restored after the spawn-failure probe");
+    fs::set_permissions(&directory.executable, fs::Permissions::from_mode(0o700))
+        .expect("restored fake executable should be private and executable");
+    runtime
+        .validate_config(&config)
+        .expect("cleanup permits should be available after ACL recovery");
+    assert!(directory.runtime_config_files().is_empty());
 }
 
 #[test]

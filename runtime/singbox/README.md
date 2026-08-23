@@ -4,8 +4,10 @@ This crate manages sing-box as an independent process through its documented
 CLI surface. It invokes the configured executable directly with fixed argument
 positions; no shell is involved. Generated configuration is written to a
 mode-`0600` file in a non-writable-by-others state directory and removed on
-validation completion or managed process cleanup. Cleanup failures are typed
-and retryable instead of being reported as success.
+validation completion or managed process cleanup. Explicit lifecycle cleanup
+failures remain typed and retryable. When a configuration write or process
+spawn has already determined the API error, a secondary unlink failure does
+not replace that error: config ownership is retained and retried asynchronously.
 
 The adapter implements configuration checking, version reporting, start,
 health/state/status, and idempotent stop. It reports direct-egress support as a
@@ -28,12 +30,11 @@ remains in managed state or transfers with the child, original group identity,
 and private configuration to the adapter's single bounded cleanup worker.
 After `SIGKILL`, ordinary cleanup receives a fixed bounded reap/liveness window;
 sub-poll cleanup budgets transfer ownership promptly instead of pretending the
-group is gone.
-Cleanup ownership is reserved before spawn; at
-capacity, a command is rejected before a child exists. The worker retains at
-most 64 cleanup permits, retries without creating a thread per failure, removes
-configuration only after process cleanup, and drains accepted work after the
-adapter is dropped. It adds no privileged networking, TLS, or sing-box library
-dependency. Non-Unix builds still bound and clean up the managed child, but
-platform-specific descendant-tree lifecycle hardening remains part of the
-cross-platform runtime work in v0.2.
+group is gone. Cleanup ownership is reserved before any private configuration
+is created or command is spawned; at capacity, a config-bearing operation is
+rejected before writing to disk. The worker retains at most 64 cleanup permits,
+retries without creating a thread per failure, removes configuration only after
+process cleanup, and drains accepted work after the adapter is dropped. It adds
+no privileged networking, TLS, or sing-box library dependency. Non-Unix builds
+still bound and clean up the managed child, but platform-specific descendant-tree
+lifecycle hardening remains part of the cross-platform runtime work in v0.2.

@@ -30,14 +30,14 @@ use nix::{
     unistd::Pid,
 };
 
-const MAX_CONFIG_CREATE_ATTEMPTS: usize = 32;
+const CLEANUP_REAPER_CAPACITY: usize = 64;
+const MAX_CONFIG_CREATE_ATTEMPTS: usize = CLEANUP_REAPER_CAPACITY;
 const MAX_ALLOWED_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ALLOWED_VERSION_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_ALLOWED_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ALLOWED_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const POST_SIGKILL_REAP_TIMEOUT: Duration = Duration::from_millis(250);
-const CLEANUP_REAPER_CAPACITY: usize = 64;
 const CLEANUP_REAPER_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Process paths and bounded timing used by the managed adapter.
@@ -121,6 +121,11 @@ struct ManagedConfig {
     runtime_json: String,
 }
 
+struct ConfigWriteFailure {
+    error: RuntimeError,
+    config: Option<ManagedConfig>,
+}
+
 impl ManagedConfig {
     fn cleanup(&mut self, operation: RuntimeOperation) -> RuntimeResult<()> {
         if self.path.as_os_str().is_empty() {
@@ -142,6 +147,8 @@ impl ManagedConfig {
 
 impl Drop for ManagedConfig {
     fn drop(&mut self) {
+        // Defense in depth only: every intentional error path explicitly cleans
+        // or transfers the config together with its reserved cleanup permit.
         if !self.path.as_os_str().is_empty() {
             let _remove_result = fs::remove_file(&self.path);
         }
@@ -291,8 +298,17 @@ impl<'a> ChildGuard<'a> {
         stop_timeout: Duration,
         cleanup_reaper: &'a CleanupReaper,
     ) -> RuntimeResult<Self> {
+        let child = match ManagedChild::new(child, operation) {
+            Ok(child) => child,
+            Err(error) => {
+                if let Some(config) = config {
+                    cleanup_config_or_handoff(config, permit, operation, cleanup_reaper);
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
-            child: Some(ManagedChild::new(child, operation)?),
+            child: Some(child),
             config,
             permit: Some(permit),
             operation,
@@ -373,6 +389,48 @@ impl Drop for ChildGuard<'_> {
     fn drop(&mut self) {
         self.handoff_remaining();
     }
+}
+
+fn cleanup_config_or_handoff(
+    mut config: ManagedConfig,
+    permit: CleanupPermit,
+    operation: RuntimeOperation,
+    cleanup_reaper: &CleanupReaper,
+) {
+    if config.cleanup(operation).is_err() {
+        cleanup_reaper.handoff(PendingCleanup::new(
+            None,
+            Some(config),
+            Some(permit),
+            operation,
+        ));
+    }
+}
+
+fn spawn_configured_child<'a>(
+    command: &mut Command,
+    config: ManagedConfig,
+    cleanup_permit: CleanupPermit,
+    operation: RuntimeOperation,
+    stop_timeout: Duration,
+    cleanup_reaper: &'a CleanupReaper,
+) -> RuntimeResult<ChildGuard<'a>> {
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let spawn_error = unavailable_for_io(operation, &error);
+            cleanup_config_or_handoff(config, cleanup_permit, operation, cleanup_reaper);
+            return Err(spawn_error);
+        }
+    };
+    ChildGuard::new(
+        child,
+        Some(config),
+        cleanup_permit,
+        operation,
+        stop_timeout,
+        cleanup_reaper,
+    )
 }
 
 fn lock_cleanup_queue(queue: &CleanupQueue) -> MutexGuard<'_, CleanupQueueState> {
@@ -511,12 +569,15 @@ impl SingBoxRuntime {
         &self,
         runtime_json: &str,
         operation: RuntimeOperation,
-    ) -> RuntimeResult<ManagedConfig> {
+    ) -> Result<ManagedConfig, ConfigWriteFailure> {
         if runtime_json.len() > self.max_config_bytes {
-            return Err(RuntimeError::InvalidInput {
-                operation,
-                field: "compiled_config",
-                reason: "configuration exceeds its byte limit",
+            return Err(ConfigWriteFailure {
+                error: RuntimeError::InvalidInput {
+                    operation,
+                    field: "compiled_config",
+                    reason: "configuration exceeds its byte limit",
+                },
+                config: None,
             });
         }
         for attempt in 0..MAX_CONFIG_CREATE_ATTEMPTS {
@@ -530,34 +591,68 @@ impl SingBoxRuntime {
             options.mode(0o600);
             match options.open(&path) {
                 Ok(mut file) => {
-                    let mut config = ManagedConfig {
+                    let config = ManagedConfig {
                         path,
                         runtime_json: runtime_json.to_owned(),
                     };
                     if let Err(error) = write_private_config(&mut file, runtime_json) {
                         drop(file);
-                        config.cleanup(operation)?;
-                        return Err(process_io(operation, &error));
+                        return Err(ConfigWriteFailure {
+                            error: process_io(operation, &error),
+                            config: Some(config),
+                        });
                     }
                     return Ok(config);
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(process_io(operation, &error)),
+                Err(error) => {
+                    return Err(ConfigWriteFailure {
+                        error: process_io(operation, &error),
+                        config: None,
+                    });
+                }
             }
         }
-        Err(RuntimeError::ProcessIo {
-            operation,
-            kind: ProcessIoKind::AlreadyExists,
+        Err(ConfigWriteFailure {
+            error: RuntimeError::ProcessIo {
+                operation,
+                kind: ProcessIoKind::AlreadyExists,
+            },
+            config: None,
         })
     }
 
+    fn prepare_config(
+        &self,
+        runtime_json: &str,
+        operation: RuntimeOperation,
+    ) -> RuntimeResult<(ManagedConfig, CleanupPermit)> {
+        let permit = self.cleanup_reaper.acquire(operation)?;
+        match self.write_config(runtime_json, operation) {
+            Ok(config) => Ok((config, permit)),
+            Err(ConfigWriteFailure {
+                error,
+                config: Some(config),
+            }) => {
+                cleanup_config_or_handoff(config, permit, operation, &self.cleanup_reaper);
+                Err(error)
+            }
+            Err(ConfigWriteFailure {
+                error,
+                config: None,
+            }) => Err(error),
+        }
+    }
+
     fn check_runtime_json(&self, runtime_json: &str) -> RuntimeResult<()> {
-        let config = self.write_config(runtime_json, RuntimeOperation::ValidateConfig)?;
+        let (config, cleanup_permit) =
+            self.prepare_config(runtime_json, RuntimeOperation::ValidateConfig)?;
         let mut command = self.configured_command(&config.path, "check");
         command.stdout(Stdio::null()).stderr(Stdio::null());
         run_status_command(
             &mut command,
-            Some(config),
+            config,
+            cleanup_permit,
             RuntimeOperation::ValidateConfig,
             self.command_timeout,
             self.stop_timeout,
@@ -675,37 +770,18 @@ impl NetworkRuntime for SingBoxRuntime {
                 })?;
 
         self.check_runtime_json(config.runtime_json())?;
-        let mut managed_config =
-            self.write_config(config.runtime_json(), RuntimeOperation::Start)?;
+        let (managed_config, cleanup_permit) =
+            self.prepare_config(config.runtime_json(), RuntimeOperation::Start)?;
         let mut command = self.configured_command(&managed_config.path, "run");
         command.stdout(Stdio::null()).stderr(Stdio::null());
-        let cleanup_permit = match self.cleanup_reaper.acquire(RuntimeOperation::Start) {
-            Ok(permit) => permit,
-            Err(error) => {
-                managed_config.cleanup(RuntimeOperation::Start)?;
-                return Err(error);
-            }
-        };
-        let child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                managed_config.cleanup(RuntimeOperation::Start)?;
-                return Err(unavailable_for_io(RuntimeOperation::Start, &error));
-            }
-        };
-        let mut child = match ChildGuard::new(
-            child,
-            Some(managed_config),
+        let mut child = spawn_configured_child(
+            &mut command,
+            managed_config,
             cleanup_permit,
             RuntimeOperation::Start,
             self.stop_timeout,
             &self.cleanup_reaper,
-        ) {
-            Ok(child) => child,
-            Err(error) => {
-                return Err(error);
-            }
-        };
+        )?;
         let startup_result = wait_until(
             child.child_mut()?,
             self.startup_probe_duration,
@@ -975,18 +1051,15 @@ fn write_private_config(file: &mut File, runtime_json: &str) -> io::Result<()> {
 
 fn run_status_command(
     command: &mut Command,
-    config: Option<ManagedConfig>,
+    config: ManagedConfig,
+    cleanup_permit: CleanupPermit,
     operation: RuntimeOperation,
     timeout: Duration,
     stop_timeout: Duration,
     cleanup_reaper: &CleanupReaper,
 ) -> RuntimeResult<ExitStatus> {
-    let cleanup_permit = cleanup_reaper.acquire(operation)?;
-    let child = command
-        .spawn()
-        .map_err(|error| unavailable_for_io(operation, &error))?;
-    let mut child = ChildGuard::new(
-        child,
+    let mut child = spawn_configured_child(
+        command,
         config,
         cleanup_permit,
         operation,
@@ -1317,6 +1390,30 @@ fn unavailable_for_io(operation: RuntimeOperation, error: &io::Error) -> Runtime
 mod cleanup_tests {
     use super::*;
 
+    static NEXT_CONFIG_CLEANUP_TEST: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    struct CleanupTestDirectory(PathBuf);
+
+    impl CleanupTestDirectory {
+        fn new() -> Self {
+            let unique =
+                NEXT_CONFIG_CLEANUP_TEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "flowprobe-config-cleanup-test-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("unique cleanup test directory should be created");
+            Self(path)
+        }
+    }
+
+    impl Drop for CleanupTestDirectory {
+        fn drop(&mut self) {
+            let _cleanup_result = fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn wait_for_worker_exit(queue: &CleanupQueue) {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
@@ -1376,6 +1473,53 @@ mod cleanup_tests {
     }
 
     #[test]
+    fn config_capacity_rejects_validate_and_start_before_writing() {
+        let directory = CleanupTestDirectory::new();
+        let state_directory = directory.0.join("state");
+        let runtime = SingBoxRuntime::new(SingBoxOptions {
+            executable: std::env::current_exe().expect("test executable should be discoverable"),
+            state_directory: state_directory.clone(),
+            command_timeout: Duration::from_secs(1),
+            startup_probe_duration: Duration::from_millis(10),
+            stop_timeout: Duration::from_millis(10),
+            max_config_bytes: 1024,
+            max_version_output_bytes: 1024,
+        })
+        .expect("runtime should initialize for capacity testing");
+        let queue = Arc::clone(&runtime.cleanup_reaper.queue);
+        let permits = (0..CLEANUP_REAPER_CAPACITY)
+            .map(|_| {
+                runtime
+                    .cleanup_reaper
+                    .acquire(RuntimeOperation::Start)
+                    .expect("capacity permit should be available")
+            })
+            .collect::<Vec<_>>();
+
+        for operation in [RuntimeOperation::ValidateConfig, RuntimeOperation::Start] {
+            assert!(matches!(
+                runtime.prepare_config("{}", operation),
+                Err(RuntimeError::Unavailable {
+                    operation: actual,
+                    reason: flowprobe_runtime_api::RuntimeUnavailableReason::Other,
+                }) if actual == operation
+            ));
+            assert_eq!(
+                fs::read_dir(&state_directory)
+                    .expect("state directory should remain readable")
+                    .count(),
+                0,
+                "capacity rejection must happen before config creation"
+            );
+        }
+
+        drop(permits);
+        drop(runtime);
+        wait_for_worker_exit(&queue);
+        assert_eq!(lock_cleanup_queue(&queue).owned, 0);
+    }
+
+    #[test]
     fn cleanup_worker_drains_pending_work_after_reaper_shutdown() {
         let reaper = CleanupReaper::new().expect("cleanup reaper should start");
         let queue = Arc::clone(&reaper.queue);
@@ -1397,6 +1541,69 @@ mod cleanup_tests {
         let state = lock_cleanup_queue(&queue);
         assert_eq!(state.owned, 0);
         assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn config_spawn_failure_handoff_retries_and_returns_its_cleanup_permit() {
+        let directory = CleanupTestDirectory::new();
+        let config_path = directory.0.join("managed-config");
+        fs::create_dir(&config_path)
+            .expect("a directory at the config path should make remove_file fail");
+        let reaper = CleanupReaper::new().expect("cleanup reaper should start");
+        let queue = Arc::clone(&reaper.queue);
+        let permit = reaper
+            .acquire(RuntimeOperation::Start)
+            .expect("cleanup permit should be available");
+
+        let mut command = Command::new("__flowprobe_missing_config_cleanup_probe__");
+        let error = match spawn_configured_child(
+            &mut command,
+            ManagedConfig {
+                path: config_path.clone(),
+                runtime_json: String::new(),
+            },
+            permit,
+            RuntimeOperation::Start,
+            Duration::from_millis(10),
+            &reaper,
+        ) {
+            Ok(_) => panic!("missing executable must not spawn"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            RuntimeError::Unavailable {
+                operation: RuntimeOperation::Start,
+                reason: flowprobe_runtime_api::RuntimeUnavailableReason::ExecutableMissing,
+            }
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let state = loop {
+            let state = lock_cleanup_queue(&queue);
+            if !state.pending.is_empty() {
+                break state;
+            }
+            drop(state);
+            assert!(
+                Instant::now() < deadline,
+                "config-only cleanup was not retained for retry"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(state.owned, 1);
+        assert!(state.worker_running);
+        fs::remove_dir(&config_path).expect("blocking directory should be removable");
+        fs::write(&config_path, b"private config")
+            .expect("retry should receive a removable regular file at the same path");
+        drop(state);
+
+        drop(reaper);
+        wait_for_worker_exit(&queue);
+        let state = lock_cleanup_queue(&queue);
+        assert_eq!(state.owned, 0);
+        assert!(state.pending.is_empty());
+        assert!(!config_path.exists());
     }
 
     #[cfg(unix)]
