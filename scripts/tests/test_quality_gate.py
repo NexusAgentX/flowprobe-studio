@@ -184,6 +184,15 @@ struct ConditionalWire;
                     rules("apps/example.test.ts", source),
                 )
 
+    def test_rejects_javascript_disabled_tests_in_ordinary_source_files(self) -> None:
+        source = (
+            'test.skip("case", () => {});\n'
+            'describe.only("group", () => {});\n'
+        )
+        self.assertEqual(
+            rules("apps/source.ts", source), {"javascript-disabled-test"}
+        )
+
     def test_javascript_test_syntax_in_template_expression_is_checked(self) -> None:
         source = 'const rendered = `prefix ${test.skip("case", () => {})}`;'
         self.assertIn(
@@ -356,7 +365,7 @@ class RepositoryScanTests(unittest.TestCase):
         )
         self.write(
             root,
-            "apps/bad.test.ts",
+            "apps/source.ts",
             'test.skip("a",()=>{}); it.todo("b"); describe.only("c",()=>{});\n'
             'try { run(); } catch (error) { "reason"; }\n',
         )
@@ -369,7 +378,16 @@ class RepositoryScanTests(unittest.TestCase):
         )
         self.write(root, "runtime/bad.sh", "# " + joined("st", "ub") + "\n")
 
-        found_rules = {finding.rule for finding in quality_gate.scan_repository(root)}
+        findings = quality_gate.scan_repository(root)
+        found_rules = {finding.rule for finding in findings}
+        self.assertIn(
+            "javascript-disabled-test",
+            {
+                finding.rule
+                for finding in findings
+                if finding.path == "apps/source.ts"
+            },
+        )
         self.assertEqual(
             found_rules,
             {
