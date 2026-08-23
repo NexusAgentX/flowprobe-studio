@@ -9,6 +9,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Keep this explicit proof runnable from a clean checkout without leaving an
+# untracked scripts/__pycache__ artifact for the local helper import below.
+sys.dont_write_bytecode = True
 import prove_v0_1_local_network as proof
 
 ROOT = Path(__file__).resolve().parents[1]
