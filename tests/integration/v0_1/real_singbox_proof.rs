@@ -39,8 +39,10 @@ struct RuntimeCleanup {
 
 impl Drop for RuntimeCleanup {
     fn drop(&mut self) {
-        if self.armed {
-            let _stop_result = self.runtime.stop();
+        if self.armed && self.runtime.stop().is_ok() {
+            // A successful stop makes the recorded process group stale. On a
+            // stop failure, retain it so the Python parent can perform its
+            // bounded, exact-process-group fallback cleanup.
             let _remove_result = fs::remove_file(&self.pid_file);
         }
     }

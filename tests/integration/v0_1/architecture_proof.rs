@@ -32,6 +32,7 @@ const TLS_CLIENT_HELLO: &str = include_str!("../../fixtures/tls/client-hello.hex
 const FLOW_ID: &str = "flow_v0_1_vertical";
 const CONNECTION_ID: &str = "connection_v0_1_vertical";
 const CAPTURE_SESSION_ID: &str = "capture_v0_1_vertical";
+const SEMANTIC_EVENT_ID: &str = "semantic_flow_v0_1_vertical_0000";
 const STARTED_AT_NS: u64 = 1_720_000_000_000_000_000;
 
 // These are deliberately synthetic canaries, never real credentials.
@@ -304,29 +305,41 @@ fn run_success_scenario() -> Value {
         )
         .expect("demo analyzer must complete before any semantic commit");
     let staged = host.staged();
+    let expected_attributes = json!({
+        "event_id": FLOW_ID,
+        "event_kind": "normalized-flow-v0",
+        "source": "deterministic-fixture",
+    });
+    assert_eq!(outcome.analyzer.id, "flowprobe.demo");
+    assert_eq!(outcome.analyzer.version, "0.1.0");
     assert_eq!(outcome.semantic_events, 1);
-    assert_eq!(staged.len(), 1);
+    assert_eq!(
+        staged,
+        vec![StagedSemantic {
+            namespace: "flowprobe.demo".to_owned(),
+            kind: "fixture-observed".to_owned(),
+            timestamp_ns: STARTED_AT_NS,
+            attributes: expected_attributes.clone(),
+        }],
+        "the demo artifact must satisfy the v0.1 semantic oracle before commit"
+    );
     assert!(host.log_text().is_empty());
 
-    for (sequence, semantic) in staged.iter().enumerate() {
-        sources
-            .store
-            .upsert_semantic_event(&SemanticEventInput {
-                event_id: SemanticEventId::new(format!(
-                    "semantic_{}_{sequence:04}",
-                    sources.flow_id.as_str()
-                ))
+    let semantic = &staged[0];
+    sources
+        .store
+        .upsert_semantic_event(&SemanticEventInput {
+            event_id: SemanticEventId::new(SEMANTIC_EVENT_ID)
                 .expect("deterministic semantic event identity must be valid"),
-                source: SemanticSource::Flow(sources.flow_id.clone()),
-                analyzer_id: outcome.analyzer.id.clone(),
-                analyzer_version: outcome.analyzer.version.clone(),
-                namespace: semantic.namespace.clone(),
-                kind: semantic.kind.clone(),
-                timestamp: TimestampNs(semantic.timestamp_ns),
-                attributes: semantic.attributes.clone(),
-            })
-            .expect("successful staged output must commit");
-    }
+            source: SemanticSource::Flow(sources.flow_id.clone()),
+            analyzer_id: outcome.analyzer.id.clone(),
+            analyzer_version: outcome.analyzer.version.clone(),
+            namespace: semantic.namespace.clone(),
+            kind: semantic.kind.clone(),
+            timestamp: TimestampNs(semantic.timestamp_ns),
+            attributes: semantic.attributes.clone(),
+        })
+        .expect("successful staged output must commit");
 
     let direct_semantics = sources
         .store
@@ -335,7 +348,25 @@ fn run_success_scenario() -> Value {
         ))
         .expect("direct semantic storage query must succeed");
     assert_eq!(direct_semantics.items.len(), 1);
-    assert_eq!(direct_semantics.items[0].attributes, staged[0].attributes);
+    let stored_semantic = &direct_semantics.items[0];
+    assert_eq!(stored_semantic.event_id.as_str(), SEMANTIC_EVENT_ID);
+    assert_eq!(
+        stored_semantic
+            .capture_session_id
+            .as_ref()
+            .map(CaptureSessionId::as_str),
+        Some(CAPTURE_SESSION_ID)
+    );
+    assert_eq!(
+        stored_semantic.source_flow_id.as_ref().map(FlowId::as_str),
+        Some(FLOW_ID)
+    );
+    assert_eq!(stored_semantic.analyzer_id, "flowprobe.demo");
+    assert_eq!(stored_semantic.analyzer_version, "0.1.0");
+    assert_eq!(stored_semantic.namespace, "flowprobe.demo");
+    assert_eq!(stored_semantic.kind, "fixture-observed");
+    assert_eq!(stored_semantic.timestamp, TimestampNs(STARTED_AT_NS));
+    assert_eq!(stored_semantic.attributes, expected_attributes);
 
     let traffic = TrafficService::new(sources.store);
     let page = traffic
@@ -355,6 +386,19 @@ fn run_success_scenario() -> Value {
             cursor: None,
         })
         .expect("Traffic semantic query must succeed");
+    assert_eq!(semantic_page.items.len(), 1);
+    let semantic_dto = &semantic_page.items[0];
+    assert_eq!(semantic_dto.event_id, SEMANTIC_EVENT_ID);
+    assert_eq!(
+        semantic_dto.capture_session_id.as_deref(),
+        Some(CAPTURE_SESSION_ID)
+    );
+    assert_eq!(semantic_dto.source_flow_id.as_deref(), Some(FLOW_ID));
+    assert_eq!(semantic_dto.analyzer_id, "flowprobe.demo");
+    assert_eq!(semantic_dto.analyzer_version, "0.1.0");
+    assert_eq!(semantic_dto.namespace, "flowprobe.demo");
+    assert_eq!(semantic_dto.kind, "fixture-observed");
+    assert_eq!(semantic_dto.timestamp_ns, STARTED_AT_NS.to_string());
 
     let page_json = serde_json::to_value(&page).expect("Traffic page must serialize");
     let detail_json = serde_json::to_value(&detail).expect("Traffic detail must serialize");

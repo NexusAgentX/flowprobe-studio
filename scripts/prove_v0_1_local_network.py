@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import http.server
 import os
+import platform
 import shutil
 import signal
 import socket
@@ -28,6 +29,12 @@ PROOF_HEADER = "INT001-LOOPBACK-PROOF"
 HTTP_BODY = "INT001_HTTP_ORIGIN_OK"
 HTTPS_BODY = "INT001_HTTPS_ORIGIN_OK"
 UNSUPPORTED_EXIT = 77
+EXPECTED_BINARY_SHA256 = {
+    ("darwin", "arm64"): "5b75c1dec19488675f725adc7a6e3a7301a553117af835dc47669b1fa918976b",
+    ("darwin", "x86_64"): "078164e43464f2282ae526151411320582c3e60a0294cec24a627edf205305a6",
+    ("linux", "aarch64"): "0bd9f22cd677d7fe70324944b3dfaf967971607ac3f713d1b754248d8b0d702d",
+    ("linux", "x86_64"): "7e9dcd7239c49478a576d79f272751e5ed1c2aba7cc08ab1b2bd69c00c904ba1",
+}
 
 
 class ProofFailure(RuntimeError):
@@ -112,23 +119,33 @@ def run_checked(command: list[str], label: str, timeout: int = 30) -> subprocess
     return result
 
 
-def binary_evidence(binary: Path) -> str:
+def binary_evidence(binary: Path, target: tuple[str, str]) -> None:
+    digest = hashlib.sha256()
+    with binary.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual_checksum = digest.hexdigest()
+    expected_checksum = EXPECTED_BINARY_SHA256[target]
+    print(f"sing-box-binary={binary}", flush=True)
+    print(f"sing-box-platform={target[0]}-{target[1]}", flush=True)
+    print(f"sing-box-sha256-expected={expected_checksum}", flush=True)
+    print(f"sing-box-sha256-actual={actual_checksum}", flush=True)
+    require(
+        actual_checksum == expected_checksum,
+        "sing-box SHA-256 mismatch for "
+        f"{target[0]}-{target[1]}: expected {expected_checksum}, got {actual_checksum}",
+    )
+    print("sing-box-sha256-verified=true", flush=True)
+
+    # Execute the file only after its bytes match the official pinned release.
     version = run_checked([str(binary), "version"], "sing-box version", timeout=10)
     lines = [line.strip() for line in version.stdout.splitlines() if line.strip()]
     require(lines and lines[0] == EXPECTED_VERSION, f"unexpected sing-box version: {lines[:1]!r}")
     revisions = [line for line in lines if line.startswith("Revision:")]
     require(revisions == [EXPECTED_REVISION], f"unexpected sing-box revision: {revisions!r}")
 
-    digest = hashlib.sha256()
-    with binary.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    checksum = digest.hexdigest()
-    print(f"sing-box-binary={binary}", flush=True)
     print(f"sing-box-version={EXPECTED_VERSION.removeprefix('sing-box version ')}", flush=True)
     print(f"sing-box-revision={EXPECTED_REVISION.removeprefix('Revision: ')}", flush=True)
-    print(f"sing-box-sha256={checksum}", flush=True)
-    return checksum
 
 
 def generate_certificate(openssl: Path, directory: Path) -> tuple[Path, Path]:
@@ -206,6 +223,13 @@ def force_runtime_cleanup(pid_file: Path) -> None:
     except (OSError, UnicodeError, ValueError) as exc:
         fail(f"cannot read the managed runtime cleanup identity: {exc}")
     require(process_group > 1, "managed runtime cleanup identity is unsafe")
+    require(
+        process_group != os.getpgrp(),
+        "refusing to terminate the proof runner's own process group",
+    )
+    # The Rust child records a dedicated runtime process group. A numeric PGID
+    # can still be reused after that child exits, so this is a bounded fallback,
+    # and the identity is retained until the group is proven absent.
     try:
         os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
@@ -273,11 +297,11 @@ def records(server: ProofServer) -> list[tuple[str, str | None]]:
         return list(server.records)
 
 
-def prove() -> None:
+def prove(target: tuple[str, str]) -> None:
     binary = executable_from_env("FLOWPROBE_SING_BOX_BIN")
+    binary_evidence(binary, target)
     curl = required_tool("curl")
     openssl = required_tool("openssl")
-    binary_evidence(binary)
     require(MANIFEST.is_file(), f"isolated integration manifest is missing: {MANIFEST}")
 
     with tempfile.TemporaryDirectory(prefix="flowprobe-v0-1-local-") as temporary:
@@ -370,18 +394,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def supported_target() -> tuple[str, str] | None:
+    if sys.platform == "darwin":
+        system = "darwin"
+    elif sys.platform.startswith("linux"):
+        system = "linux"
+    else:
+        return None
+
+    machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        architecture = "arm64" if system == "darwin" else "aarch64"
+    elif machine in {"x86_64", "amd64"}:
+        architecture = "x86_64"
+    else:
+        return None
+    target = (system, architecture)
+    return target if target in EXPECTED_BINARY_SHA256 else None
+
+
 def main() -> int:
     args = parse_args()
-    supported = sys.platform == "darwin" or sys.platform.startswith("linux")
-    if not supported:
+    target = supported_target()
+    if target is None:
         message = (
-            f"unsupported host OS {sys.platform!r}: this proof requires POSIX process-group "
-            "cleanup plus curl and OpenSSL"
+            f"unsupported host {sys.platform!r}/{platform.machine()!r}: this proof requires one "
+            "of darwin-arm64, darwin-x86_64, linux-aarch64, or linux-x86_64"
         )
         print(f"ERROR: {message}", file=sys.stderr)
         return 1 if args.require_supported else UNSUPPORTED_EXIT
     try:
-        prove()
+        prove(target)
     except ProofFailure as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
