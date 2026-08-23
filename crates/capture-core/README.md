@@ -5,7 +5,8 @@ emits `flowprobe-model`'s `NormalizedFlowV0`. It does not import sing-box or
 encode product-specific hosts, paths, or routing behavior.
 
 The v0 decoder recognizes plaintext HTTP/1, the HTTP/2 client preface and
-bounded frames, and TLS records carrying an in-record ClientHello. TLS wire
+bounded frames, and TLS records carrying a bounded ClientHello, including a
+ClientHello split across consecutive handshake records. TLS wire
 bytes are kept separate from application bytes supplied by an explicit
 successful interception boundary. A passed-through TLS connection therefore
 emits connection and TLS metadata without pretending that encrypted bytes are
@@ -23,6 +24,26 @@ unsupported in the minimum v0 path rather than being decoded as ordinary
 message bodies.
 ClientHello metadata parsing enforces bounded session identifiers, unique
 extension types, non-empty ALPN lists, and valid SNI list structure.
+
+The minimum TLS interception boundary generates a path-length-zero CA in
+memory, issues a short-lived end-entity certificate for one exact expected SNI,
+and terminates downstream TLS with an explicit rustls ring provider. It
+authenticates the upstream server against a separately supplied root store
+before reading or forwarding the downstream HTTP request.
+The expected downstream DNS identity is normalized to lowercase without an
+optional absolute-name trailing dot, matching DNS case semantics and rustls's
+RFC 6066 wire SNI form; invalid DNS names still fail closed. The v0 relay handles
+one bounded HTTP/1.1 transaction with `Content-Length` framing; unsupported
+ALPNs, transfer encoding, pipelining, malformed framing, trust failures,
+progress or transcript-limit failures fail closed with typed errors. Socket I/O
+has a per-operation idle timeout, while one shared monotonic transaction
+deadline covers ClientHello intake, both TLS handshakes, and the HTTP relay; a
+peer cannot extend that deadline by trickling bytes before the idle timeout.
+TLS handshakes also have an explicit read/write-operation ceiling. The host
+supplies already-connected downstream and upstream TCP streams, so Capture Core
+remains independent from routing/runtime internals.
+CA installation, persistence/rotation, HTTP/2 relay, fallback policy, and
+multi-transaction connection handling remain outside this minimum proof.
 
 Every session has per-direction pending-byte backpressure. Header bytes,
 header count, body bytes, HTTP/2 frame payload/count, HPACK strings/table size,

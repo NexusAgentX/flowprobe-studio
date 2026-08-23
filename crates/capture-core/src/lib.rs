@@ -7,6 +7,7 @@
 mod error;
 mod http1;
 mod http2;
+mod interception;
 mod tls;
 
 use std::{collections::BTreeMap, fmt};
@@ -16,6 +17,10 @@ use flowprobe_model::{
     CaptureSessionId, ConnectionId, ConnectionMetadata, DestinationMetadata, FlowId, FlowTiming,
     NORMALIZED_FLOW_CONTRACT_VERSION, NormalizedFlowV0, ProcessAttribution, ProtocolEvent,
     TlsInterceptionState, TlsMetadata, TransportMetadata, TransportProtocol,
+};
+pub use interception::{
+    CertificateAuthority, InterceptionError, InterceptionFailureStage, InterceptionLimits,
+    InterceptionResult, InterceptionTarget, TlsInterceptor, TlsTranscript,
 };
 use serde_json::Value;
 
