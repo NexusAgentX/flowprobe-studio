@@ -21,7 +21,7 @@ path = "tls_interception_proof.rs"
 [[bin]]
 name = "flowprobe-v0-1-real-singbox-proof"
 path = "real_singbox_proof.rs"
-test = false
+test = true
 bench = false
 
 [dependencies]

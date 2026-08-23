@@ -70,14 +70,16 @@ jobs:
           python-version: '3.12'
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Lint workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Check workspace
-        run: cargo check --workspace
-      - name: Test workspace
-        run: cargo test --workspace
-      - name: Test isolated v0.1 architecture proof
-        run: python scripts/check_v0_1_integration.py
+      - name: Lint locked root Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check locked root Rust workspace
+        run: cargo check --workspace --locked
+      - name: Test locked root Rust workspace
+        run: cargo test --workspace --locked
+      - name: Verify real curl for the hermetic curlrc regression
+        run: curl --disable --version
+      - name: Run corrected isolated v0.1 release gate
+        run: python -B scripts/check_v0_1_integration.py
 
   desktop:
     name: Desktop renderer

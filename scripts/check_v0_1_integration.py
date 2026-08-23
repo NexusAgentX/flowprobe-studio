@@ -38,6 +38,31 @@ def main() -> int:
     manifest = str(MANIFEST)
     steps = [
         (
+            "validate repository task contracts",
+            [sys.executable, "-B", str(ROOT / "scripts" / "validate_tasks.py")],
+            False,
+        ),
+        (
+            "test the anti-shortcut quality gate",
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                str(ROOT / "scripts" / "tests"),
+                "-p",
+                "test_quality_gate.py",
+            ],
+            False,
+        ),
+        (
+            "run the repository anti-shortcut gate",
+            [sys.executable, "-B", str(ROOT / "scripts" / "quality_gate.py")],
+            False,
+        ),
+        (
             "verify the independent lock file",
             [
                 "cargo",
@@ -68,6 +93,45 @@ def main() -> int:
                 "--",
                 "-D",
                 "warnings",
+            ],
+            False,
+        ),
+        (
+            "run the deterministic architecture proof",
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                manifest,
+                "--locked",
+                "--test",
+                "architecture_proof",
+            ],
+            False,
+        ),
+        (
+            "run the generated-CA TLS interception proof",
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                manifest,
+                "--locked",
+                "--test",
+                "tls_interception_proof",
+            ],
+            False,
+        ),
+        (
+            "run the hermetic real-proof curl command tests",
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                manifest,
+                "--locked",
+                "--bin",
+                "flowprobe-v0-1-real-singbox-proof",
             ],
             False,
         ),

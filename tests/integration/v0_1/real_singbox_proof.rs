@@ -232,7 +232,14 @@ fn prove_origins_through_proxy(
 }
 
 fn run_curl(curl: &Path, proxy: &str, url: &str, certificate: Option<&Path>) -> io::Result<Output> {
+    build_curl_command(curl, proxy, url, certificate).output()
+}
+
+fn build_curl_command(curl: &Path, proxy: &str, url: &str, certificate: Option<&Path>) -> Command {
     let mut command = Command::new(curl);
+    // curl only treats --disable as a curlrc opt-out when it is the first
+    // argument. Keep it ahead of every transport and trust assertion.
+    command.arg("--disable");
     command.args([
         "--fail",
         "--silent",
@@ -249,7 +256,8 @@ fn run_curl(curl: &Path, proxy: &str, url: &str, certificate: Option<&Path>) -> 
     if let Some(certificate) = certificate {
         command.arg("--cacert").arg(certificate);
     }
-    command.arg(url).output()
+    command.arg(url);
+    command
 }
 
 fn require_output(output: Output, label: &str, expected: &str) -> io::Result<()> {
@@ -422,4 +430,397 @@ fn require(condition: bool, message: &str) -> io::Result<()> {
 
 fn invalid_config(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        ffi::{OsStr, OsString},
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        process,
+        sync::atomic::{AtomicU64, Ordering},
+        thread::{self, JoinHandle},
+        time::{Instant, SystemTime, UNIX_EPOCH},
+    };
+
+    const HOSTILE_CANARY: &str = "FLOWPROBE_CURLRC_CANARY";
+    const HOSTILE_HEADER: &str = "X-FlowProbe-Hostile-Curlrc: loaded";
+    const RESPONSE_BODY: &str = "FLOWPROBE_HERMETIC_CURL_BODY";
+    const SERVER_DEADLINE: Duration = Duration::from_secs(5);
+    const MAX_REQUEST_BYTES: usize = 32 * 1024;
+    static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct HostileCurlEnvironment {
+        root: PathBuf,
+        home: PathBuf,
+        curl_home: PathBuf,
+        xdg_config_home: PathBuf,
+        user_profile: PathBuf,
+        app_data: PathBuf,
+        cleaned: bool,
+    }
+
+    impl HostileCurlEnvironment {
+        fn create() -> io::Result<Self> {
+            let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_nanos();
+            let root = env::temp_dir().join(format!(
+                "flowprobe-int-002-curlrc-{}-{nanos}-{sequence}",
+                process::id()
+            ));
+            fs::create_dir(&root)?;
+
+            let environment = Self {
+                home: root.join("home"),
+                curl_home: root.join("curl-home"),
+                xdg_config_home: root.join("xdg-config-home"),
+                user_profile: root.join("user-profile"),
+                app_data: root.join("app-data"),
+                root,
+                cleaned: false,
+            };
+            let config = format!(
+                "insecure\nwrite-out = \"{HOSTILE_CANARY}\"\nheader = \"{HOSTILE_HEADER}\"\n"
+            );
+            for directory in environment.directories() {
+                fs::create_dir(directory)?;
+                for file_name in [".curlrc", "_curlrc", "curlrc"] {
+                    fs::write(directory.join(file_name), &config)?;
+                }
+            }
+            Ok(environment)
+        }
+
+        fn directories(&self) -> [&Path; 5] {
+            [
+                &self.home,
+                &self.curl_home,
+                &self.xdg_config_home,
+                &self.user_profile,
+                &self.app_data,
+            ]
+        }
+
+        fn apply_to(&self, command: &mut Command) {
+            command
+                .env("HOME", &self.home)
+                .env("CURL_HOME", &self.curl_home)
+                .env("XDG_CONFIG_HOME", &self.xdg_config_home)
+                .env("USERPROFILE", &self.user_profile)
+                .env("APPDATA", &self.app_data);
+        }
+
+        fn cleanup(&mut self) -> io::Result<()> {
+            fs::remove_dir_all(&self.root)?;
+            require(
+                !self.root.exists(),
+                "hostile curl environment remained after explicit cleanup",
+            )?;
+            self.cleaned = true;
+            Ok(())
+        }
+    }
+
+    impl Drop for HostileCurlEnvironment {
+        fn drop(&mut self) {
+            if !self.cleaned && self.root.exists() {
+                eprintln!(
+                    "hostile curl environment was not explicitly cleaned; applying fallback: {}",
+                    self.root.display()
+                );
+                if let Err(error) = fs::remove_dir_all(&self.root) {
+                    eprintln!(
+                        "failed to remove hostile curl environment {}: {error}",
+                        self.root.display()
+                    );
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum DisableMutation {
+        None,
+        Remove,
+        MoveToSecond,
+    }
+
+    #[test]
+    fn curl_builder_disables_user_configuration_before_every_other_argument() {
+        let http = build_curl_command(
+            Path::new("curl"),
+            "http://127.0.0.1:41001",
+            "http://127.0.0.1:41002/proof",
+            None,
+        );
+        assert_eq!(http.get_args().next(), Some(OsStr::new("--disable")));
+        assert_eq!(
+            http.get_args()
+                .filter(|argument| *argument == OsStr::new("--disable"))
+                .count(),
+            1
+        );
+        assert!(!http.get_args().any(|argument| argument == "--cacert"));
+
+        let certificate = Path::new("flowprobe-int-002-origin.crt");
+        let https = build_curl_command(
+            Path::new("curl"),
+            "http://127.0.0.1:41001",
+            "https://127.0.0.1:41003/proof",
+            Some(certificate),
+        );
+        let https_arguments = https.get_args().collect::<Vec<_>>();
+        assert_eq!(
+            https_arguments.first().copied(),
+            Some(OsStr::new("--disable"))
+        );
+        let certificate_position = https_arguments
+            .iter()
+            .position(|argument| *argument == OsStr::new("--cacert"))
+            .expect("HTTPS proof command must retain an explicit CA certificate");
+        assert_eq!(
+            https_arguments.get(certificate_position + 1).copied(),
+            Some(certificate.as_os_str())
+        );
+    }
+
+    #[test]
+    fn hostile_curlrc_is_ignored_only_when_disable_is_first() {
+        let mut environment =
+            HostileCurlEnvironment::create().expect("hostile curl environment must be created");
+
+        let (hermetic_output, hermetic_request) =
+            invoke_loopback_curl(&environment, DisableMutation::None)
+                .expect("production curl invocation must complete");
+        require_output(hermetic_output, "hermetic HTTP", RESPONSE_BODY)
+            .expect("production curl invocation must preserve the exact response body");
+        assert_request_is_hermetic(&hermetic_request);
+
+        for mutation in [DisableMutation::Remove, DisableMutation::MoveToSecond] {
+            let (mutated_output, mutated_request) = invoke_loopback_curl(&environment, mutation)
+                .expect("mutated curl invocation must complete");
+            assert!(mutated_output.status.success());
+            assert_eq!(
+                String::from_utf8(mutated_output.stdout.clone())
+                    .expect("curl stdout must remain UTF-8"),
+                format!("{RESPONSE_BODY}{HOSTILE_CANARY}"),
+                "mutation control did not prove that curl loaded hostile startup configuration"
+            );
+            assert!(
+                request_contains_header(&mutated_request, HOSTILE_HEADER),
+                "mutation control did not inject the hostile curlrc header"
+            );
+            assert!(
+                require_output(mutated_output, "mutated HTTP", RESPONSE_BODY).is_err(),
+                "the strict production output assertion must reject a curlrc canary"
+            );
+        }
+        let temporary_root = environment.root.clone();
+        environment
+            .cleanup()
+            .expect("hostile curl environment must be explicitly removed");
+        assert!(!temporary_root.exists());
+    }
+
+    fn invoke_loopback_curl(
+        environment: &HostileCurlEnvironment,
+        mutation: DisableMutation,
+    ) -> io::Result<(Output, Vec<u8>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let proxy = format!("http://{address}");
+        let target = "http://127.0.0.1:9/int-002-curlrc-proof";
+        let curl = resolve_real_curl()?;
+        let command = build_curl_command(&curl, &proxy, target, None);
+        let mut command = mutate_disable_position(command, mutation)?;
+        environment.apply_to(&mut command);
+
+        let server = spawn_loopback_responder(listener);
+        let output_result = command.output();
+        let request_result = join_responder(server);
+        let output = output_result?;
+        let request = request_result?;
+        Ok((output, request))
+    }
+
+    fn mutate_disable_position(command: Command, mutation: DisableMutation) -> io::Result<Command> {
+        if matches!(mutation, DisableMutation::None) {
+            return Ok(command);
+        }
+        let program = command.get_program().to_os_string();
+        let original_arguments = command.get_args().map(OsString::from).collect::<Vec<_>>();
+        require(
+            original_arguments
+                .first()
+                .is_some_and(|argument| argument == "--disable"),
+            "mutation control requires --disable to begin as the first argument",
+        )?;
+        let mut arguments = original_arguments.clone();
+        let disable = arguments.remove(0);
+        if matches!(mutation, DisableMutation::MoveToSecond) {
+            require(
+                !arguments.is_empty(),
+                "mutation control requires at least one non-disable argument",
+            )?;
+            arguments.insert(1, disable);
+        }
+        let expected_arguments = match mutation {
+            DisableMutation::None => unreachable!("the no-mutation case returned above"),
+            DisableMutation::Remove => original_arguments[1..].to_vec(),
+            DisableMutation::MoveToSecond => {
+                let mut expected = original_arguments[1..].to_vec();
+                expected.insert(1, original_arguments[0].clone());
+                expected
+            }
+        };
+        require(
+            arguments == expected_arguments,
+            "mutation control changed arguments other than --disable placement",
+        )?;
+        let mut mutated = Command::new(program);
+        mutated.args(arguments);
+        Ok(mutated)
+    }
+
+    fn resolve_real_curl() -> io::Result<PathBuf> {
+        let path = env::var_os("PATH")
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PATH is missing"))?;
+        let executable_names: &[&str] = if cfg!(windows) {
+            &["curl.exe", "curl"]
+        } else {
+            &["curl"]
+        };
+        for directory in env::split_paths(&path) {
+            for executable_name in executable_names {
+                let candidate = directory.join(executable_name);
+                if !candidate.is_file() {
+                    continue;
+                }
+                let Ok(absolute) = fs::canonicalize(candidate) else {
+                    continue;
+                };
+                let Ok(version) = Command::new(&absolute)
+                    .args(["--disable", "--version"])
+                    .output()
+                else {
+                    continue;
+                };
+                if version.status.success() && version.stdout.starts_with(b"curl ") {
+                    return Ok(absolute);
+                }
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "PATH contains no absolute executable that identifies as curl",
+        ))
+    }
+
+    fn spawn_loopback_responder(listener: TcpListener) -> JoinHandle<io::Result<Vec<u8>>> {
+        thread::spawn(move || respond_once(listener))
+    }
+
+    fn join_responder(server: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+        server
+            .join()
+            .map_err(|_| io::Error::other("loopback curl responder thread panicked"))?
+    }
+
+    fn respond_once(listener: TcpListener) -> io::Result<Vec<u8>> {
+        let deadline = Instant::now() + SERVER_DEADLINE;
+        listener.set_nonblocking(true)?;
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _peer)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "loopback curl responder accept deadline expired",
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let request = read_bounded_request(&mut stream, deadline)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "loopback curl responder write deadline expired",
+            ));
+        }
+        stream.set_write_timeout(Some(remaining))?;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{RESPONSE_BODY}",
+            RESPONSE_BODY.len()
+        );
+        stream.write_all(response.as_bytes())?;
+        stream.flush()?;
+        Ok(request)
+    }
+
+    fn read_bounded_request(stream: &mut TcpStream, deadline: Instant) -> io::Result<Vec<u8>> {
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 4096];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            if request.len() >= MAX_REQUEST_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "loopback curl request exceeded the byte limit",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "loopback curl responder read deadline expired",
+                ));
+            }
+            stream.set_read_timeout(Some(remaining.min(Duration::from_millis(250))))?;
+            match stream.read(&mut buffer) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "loopback curl request ended before its headers",
+                    ));
+                }
+                Ok(read) => {
+                    let available = MAX_REQUEST_BYTES.saturating_sub(request.len());
+                    if read > available {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "loopback curl request exceeded the byte limit",
+                        ));
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(request)
+    }
+
+    fn assert_request_is_hermetic(request: &[u8]) {
+        assert!(request_contains_header(request, PROOF_HEADER));
+        assert!(!request_contains_header(request, HOSTILE_HEADER));
+    }
+
+    fn request_contains_header(request: &[u8], header: &str) -> bool {
+        String::from_utf8_lossy(request)
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case(header))
+    }
 }
