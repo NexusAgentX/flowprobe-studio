@@ -512,7 +512,7 @@ fn request_metadata(
     byte_count: u64,
 ) -> Result<HttpRequestMetadata, CaptureError> {
     let method = required_unique_text(fields, b":method", HttpSide::Request, "method")?;
-    if method.eq_ignore_ascii_case("CONNECT") {
+    if method == "CONNECT" {
         return Err(CaptureError::UnsupportedHttp2(
             "CONNECT request in the minimum v0 path",
         ));
@@ -529,7 +529,7 @@ fn request_metadata(
         .ok_or(CaptureError::MalformedHttp2("request authority is missing"))?;
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Request, "content-type")?;
-    validate_content_length(fields, byte_count, HttpSide::Request)?;
+    validate_content_length(fields, byte_count, HttpSide::Request, true)?;
     Ok(HttpRequestMetadata {
         method,
         scheme,
@@ -557,15 +557,18 @@ fn response_metadata(
             "informational response in the minimum v0 path",
         ));
     }
-    let head_response = request_method.eq_ignore_ascii_case("HEAD");
+    let head_response = request_method == "HEAD";
     if byte_count != 0 && (head_response || matches!(status, 204 | 304)) {
         return Err(CaptureError::MalformedHttp2(
             "response semantics forbid a message body",
         ));
     }
-    if !head_response && status != 304 {
-        validate_content_length(fields, byte_count, HttpSide::Response)?;
-    }
+    validate_content_length(
+        fields,
+        byte_count,
+        HttpSide::Response,
+        !head_response && status != 304,
+    )?;
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Response, "content-type")?;
     Ok(HttpResponseMetadata {
@@ -582,15 +585,19 @@ fn validate_content_length(
     fields: &[HeaderField],
     byte_count: u64,
     side: HttpSide,
+    compare_payload: bool,
 ) -> Result<(), CaptureError> {
     let Some(value) = optional_unique_text(fields, b"content-length", side, "content-length")?
     else {
         return Ok(());
     };
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(CaptureError::MalformedHttp2("invalid content-length"));
+    }
     let declared = value
         .parse::<u64>()
         .map_err(|_| CaptureError::MalformedHttp2("invalid content-length"))?;
-    if declared != byte_count {
+    if compare_payload && declared != byte_count {
         return Err(CaptureError::MalformedHttp2(
             "content-length does not match DATA payload bytes",
         ));

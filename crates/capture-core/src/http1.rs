@@ -89,6 +89,12 @@ fn parse_request(
             reason: "missing request method",
         })?
         .to_owned();
+    if method == "CONNECT" {
+        return Err(CaptureError::UnsupportedHttp1Framing {
+            side: HttpSide::Request,
+            framing: "CONNECT tunnel in the minimum v0 path",
+        });
+    }
     let target = request.path.ok_or(CaptureError::MalformedHttp1 {
         side: HttpSide::Request,
         reason: "missing request target",
@@ -159,15 +165,19 @@ fn parse_response(
         side: HttpSide::Response,
         reason: "missing response status",
     })?;
+    if (100..200).contains(&status) {
+        return Err(CaptureError::UnsupportedHttp1Framing {
+            side: HttpSide::Response,
+            framing: "informational response sequence in the minimum v0 path",
+        });
+    }
     let status = HttpStatus::new(status)?;
     let version = response.version.ok_or(CaptureError::MalformedHttp1 {
         side: HttpSide::Response,
         reason: "missing response version",
     })?;
     let content_type = optional_header_value(response.headers, "content-type", HttpSide::Response)?;
-    let body_forbidden = request_method == "HEAD"
-        || (100..200).contains(&status.get())
-        || matches!(status.get(), 204 | 304);
+    let body_forbidden = request_method == "HEAD" || matches!(status.get(), 204 | 304);
     let byte_count = body_byte_count(
         &input[header_end..],
         response.headers,
@@ -373,6 +383,12 @@ fn content_length(
                 reason: "content-length is not ASCII",
             }
         })?;
+        if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(CaptureError::MalformedHttp1 {
+                side,
+                reason: "invalid content-length",
+            });
+        }
         parsed = Some(
             text.parse::<usize>()
                 .map_err(|_| CaptureError::MalformedHttp1 {

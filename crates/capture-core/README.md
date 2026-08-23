@@ -16,6 +16,9 @@ initial non-acknowledgement SETTINGS frame from each participating peer, an odd
 client stream identifier, ordinary request pseudo-headers, consistent body
 semantics, and a complete END_STREAM transition. Text protocols without a
 structural HTTP/1.0 or HTTP/1.1 request line remain opaque connections.
+HTTP/1 CONNECT tunnels and informational response sequences are explicitly
+unsupported in the minimum v0 path rather than being decoded as ordinary
+message bodies.
 
 Every session has per-direction pending-byte backpressure. Header bytes,
 header count, body bytes, HTTP/2 frame payload/count, HPACK strings/table size,

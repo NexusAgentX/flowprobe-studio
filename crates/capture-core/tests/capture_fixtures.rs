@@ -397,6 +397,76 @@ fn non_http_text_protocols_fall_back_to_opaque_connection_metadata() {
 }
 
 #[test]
+fn http1_tunnels_interim_responses_and_invalid_lengths_are_typed_errors() {
+    let connect = CaptureCore::default().capture(
+        context("http1_connect", 443),
+        DirectionalData {
+            client_to_server: b"CONNECT fixture.test:443 HTTP/1.1\r\nHost: fixture.test\r\n\r\n",
+            server_to_client: b"HTTP/1.1 200 Connection Established\r\n\r\n0123456789",
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        connect,
+        Err(CaptureError::UnsupportedHttp1Framing {
+            side: flowprobe_capture_core::HttpSide::Request,
+            ..
+        })
+    ));
+
+    for (suffix, response) in [
+        ("lone", b"HTTP/1.1 100 Continue\r\n\r\n".as_slice()),
+        (
+            "followed_by_final",
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".as_slice(),
+        ),
+    ] {
+        let result = CaptureCore::default().capture(
+            context(&format!("http1_interim_{suffix}"), 80),
+            DirectionalData {
+                client_to_server:
+                    b"POST / HTTP/1.1\r\nHost: fixture.test\r\nContent-Length: 0\r\n\r\n",
+                server_to_client: response,
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(
+            result,
+            Err(CaptureError::UnsupportedHttp1Framing {
+                side: flowprobe_capture_core::HttpSide::Response,
+                ..
+            })
+        ));
+    }
+
+    for (suffix, request, response) in [
+        (
+            "request",
+            b"POST / HTTP/1.1\r\nHost: fixture.test\r\nContent-Length: +1\r\n\r\nx".as_slice(),
+            b"".as_slice(),
+        ),
+        (
+            "bodyless_response",
+            b"GET / HTTP/1.1\r\nHost: fixture.test\r\n\r\n".as_slice(),
+            b"HTTP/1.1 304 Not Modified\r\nContent-Length: +1\r\n\r\n".as_slice(),
+        ),
+    ] {
+        let result = CaptureCore::default().capture(
+            context(&format!("http1_signed_length_{suffix}"), 80),
+            DirectionalData {
+                client_to_server: request,
+                server_to_client: response,
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp1 { .. })));
+    }
+}
+
+#[test]
 fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
     let missing_scheme = h2_request(1, 0x05, &[0x82, 0x84], None);
     let valid_headers = [
@@ -411,6 +481,9 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
     let mut mismatched_length_headers = valid_headers.to_vec();
     mismatched_length_headers.extend_from_slice(b"\x00\x0econtent-length\x012");
     let mismatched_length = h2_request(1, 0x04, &mismatched_length_headers, Some((0x01, b"x")));
+    let mut signed_length_headers = valid_headers.to_vec();
+    signed_length_headers.extend_from_slice(b"\x00\x0econtent-length\x02+1");
+    let signed_length = h2_request(1, 0x04, &signed_length_headers, Some((0x01, b"x")));
 
     for (suffix, bytes, expected) in [
         ("h2_missing_scheme", missing_scheme, "malformed"),
@@ -427,6 +500,7 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
             mismatched_length,
             "malformed",
         ),
+        ("h2_signed_content_length", signed_length, "malformed"),
         ("h2_connect", connect_request, "unsupported"),
     ] {
         let result = CaptureCore::default().capture(
@@ -526,6 +600,89 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
                 .byte_count,
             0
         );
+    }
+
+    let lowercase_connect = h2_request(
+        1,
+        0x05,
+        b"\x02\x07connect\x87\x84\x01\x0cfixture.test",
+        None,
+    );
+    let lowercase_connect_flow = CaptureCore::default()
+        .capture(
+            context("h2_lowercase_connect", 443),
+            DirectionalData {
+                client_to_server: &lowercase_connect,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("lowercase extension method is distinct from CONNECT");
+    assert_eq!(
+        http_transaction(&lowercase_connect_flow).request.method,
+        "connect"
+    );
+
+    let lowercase_head = h2_request(1, 0x05, b"\x02\x04head\x87\x84\x01\x0cfixture.test", None);
+    let mut lowercase_head_response = h2_frame(4, 0, 0, &[]);
+    lowercase_head_response.extend(h2_frame(1, 0x04, 1, &[0x88]));
+    lowercase_head_response.extend(h2_frame(0, 0x01, 1, b"x"));
+    let lowercase_head_flow = CaptureCore::default()
+        .capture(
+            context("h2_lowercase_head", 443),
+            DirectionalData {
+                client_to_server: &lowercase_head,
+                server_to_client: &lowercase_head_response,
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("lowercase extension method is distinct from HEAD");
+    assert_eq!(
+        http_transaction(&lowercase_head_flow)
+            .response
+            .as_ref()
+            .expect("response metadata")
+            .byte_count,
+        1
+    );
+
+    for (suffix, client_headers, status_header, length_headers) in [
+        (
+            "h2_head_signed_content_length",
+            b"\x02\x04HEAD\x87\x84\x01\x0cfixture.test".as_slice(),
+            0x88,
+            b"\x00\x0econtent-length\x02+1".as_slice(),
+        ),
+        (
+            "h2_304_signed_content_length",
+            valid_headers.as_slice(),
+            0x8b,
+            b"\x00\x0econtent-length\x02+1".as_slice(),
+        ),
+        (
+            "h2_head_duplicate_content_length",
+            b"\x02\x04HEAD\x87\x84\x01\x0cfixture.test".as_slice(),
+            0x88,
+            b"\x00\x0econtent-length\x011\x00\x0econtent-length\x011".as_slice(),
+        ),
+    ] {
+        let client = h2_request(1, 0x05, client_headers, None);
+        let mut response_headers = vec![status_header];
+        response_headers.extend_from_slice(length_headers);
+        let mut server = h2_frame(4, 0, 0, &[]);
+        server.extend(h2_frame(1, 0x05, 1, &response_headers));
+        let result = CaptureCore::default().capture(
+            context(suffix, 443),
+            DirectionalData {
+                client_to_server: &client,
+                server_to_client: &server,
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
     }
 }
 
