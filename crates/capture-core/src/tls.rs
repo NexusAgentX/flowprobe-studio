@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -123,6 +123,11 @@ fn parse_client_hello(
     let legacy_version = cursor.array_2("missing ClientHello legacy version")?;
     cursor.take(32, "truncated ClientHello random")?;
     let session_id_length = usize::from(cursor.u8("missing ClientHello session ID length")?);
+    if session_id_length > 32 {
+        return Err(CaptureError::MalformedTls(
+            "ClientHello session ID exceeds 32 bytes",
+        ));
+    }
     cursor.take(session_id_length, "truncated ClientHello session ID")?;
     let cipher_suites_length = usize::from(cursor.u16("missing cipher suite list length")?);
     if cipher_suites_length == 0 || cipher_suites_length % 2 != 0 {
@@ -157,6 +162,7 @@ fn parse_client_hello(
     let extension_block = cursor.take(extension_bytes, "truncated extension block")?;
     let mut extension_cursor = Cursor::new(extension_block);
     let mut extension_count = 0usize;
+    let mut extension_types = BTreeSet::new();
     let mut sni = None;
     let mut offered_alpn = Vec::new();
     let mut offered_versions = Vec::new();
@@ -170,27 +176,21 @@ fn parse_client_hello(
             });
         }
         let extension_type = extension_cursor.u16("truncated extension type")?;
+        if !extension_types.insert(extension_type) {
+            return Err(CaptureError::MalformedTls(
+                "duplicate ClientHello extension type",
+            ));
+        }
         let extension_length = usize::from(extension_cursor.u16("truncated extension length")?);
         let data = extension_cursor.take(extension_length, "truncated extension data")?;
         match extension_type {
             0 => {
-                if sni.is_some() {
-                    return Err(CaptureError::MalformedTls("duplicate SNI extension"));
-                }
                 sni = parse_sni(data)?;
             }
             16 => {
-                if !offered_alpn.is_empty() {
-                    return Err(CaptureError::MalformedTls("duplicate ALPN extension"));
-                }
                 offered_alpn = parse_alpn(data)?;
             }
             43 => {
-                if !offered_versions.is_empty() {
-                    return Err(CaptureError::MalformedTls(
-                        "duplicate supported versions extension",
-                    ));
-                }
                 offered_versions = parse_supported_versions(data)?;
             }
             _ => {}
@@ -208,19 +208,33 @@ fn parse_client_hello(
 fn parse_sni(data: &[u8]) -> Result<Option<String>, CaptureError> {
     let mut cursor = Cursor::new(data);
     let list_length = usize::from(cursor.u16("missing server name list length")?);
-    if list_length != cursor.remaining() {
+    if list_length == 0 || list_length != cursor.remaining() {
         return Err(CaptureError::MalformedTls(
             "server name list length mismatch",
         ));
     }
     let mut host = None;
+    let mut seen_name_types = [false; 256];
     while cursor.remaining() > 0 {
         let name_type = cursor.u8("truncated server name type")?;
+        let name_type_index = usize::from(name_type);
+        if seen_name_types[name_type_index] {
+            return Err(CaptureError::MalformedTls("duplicate server name type"));
+        }
+        seen_name_types[name_type_index] = true;
         let name_length = usize::from(cursor.u16("truncated server name length")?);
         let name = cursor.take(name_length, "truncated server name")?;
-        if name_type == 0 && host.is_none() {
-            if name.is_empty() || name.iter().any(|byte| byte.is_ascii_control()) {
-                return Err(CaptureError::MalformedTls("invalid empty or control SNI"));
+        if name.is_empty() {
+            return Err(CaptureError::MalformedTls("empty server name"));
+        }
+        if name_type == 0 {
+            if !name.is_ascii()
+                || name.ends_with(b".")
+                || name
+                    .iter()
+                    .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+            {
+                return Err(CaptureError::MalformedTls("invalid SNI host name"));
             }
             host = Some(
                 std::str::from_utf8(name)
@@ -238,7 +252,7 @@ fn parse_sni(data: &[u8]) -> Result<Option<String>, CaptureError> {
 fn parse_alpn(data: &[u8]) -> Result<Vec<String>, CaptureError> {
     let mut cursor = Cursor::new(data);
     let list_length = usize::from(cursor.u16("missing ALPN list length")?);
-    if list_length != cursor.remaining() {
+    if list_length < 2 || list_length != cursor.remaining() {
         return Err(CaptureError::MalformedTls("ALPN list length mismatch"));
     }
     let mut protocols = Vec::new();
@@ -250,9 +264,10 @@ fn parse_alpn(data: &[u8]) -> Result<Vec<String>, CaptureError> {
         let protocol = cursor.take(protocol_length, "truncated ALPN protocol")?;
         protocols.push(
             std::str::from_utf8(protocol)
-                .map_err(|_| CaptureError::InvalidText {
-                    protocol: "TLS",
-                    field: "ALPN",
+                .map_err(|_| {
+                    CaptureError::UnsupportedTls(
+                        "non-UTF-8 ALPN protocol identifier in the minimum v0 path",
+                    )
                 })?
                 .to_owned(),
         );

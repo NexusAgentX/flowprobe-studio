@@ -204,6 +204,71 @@ fn tls_passthrough_and_intercepted_boundaries_are_explicit() {
 }
 
 #[test]
+fn tls_client_hello_structure_constraints_are_enforced() {
+    let cases = [
+        ("session_id_too_long", tls_client_hello(&[0; 33], &[])),
+        ("empty_alpn", tls_client_hello(&[], &[(16, b"\0\0")])),
+        (
+            "duplicate_extension",
+            tls_client_hello(&[], &[(0xff00, b""), (0xff00, b"")]),
+        ),
+        (
+            "duplicate_sni_extension_after_unknown_name",
+            tls_client_hello(&[], &[(0, b"\0\x04\x01\0\x01x"), (0, b"\0\x04\0\0\x01a")]),
+        ),
+        (
+            "duplicate_alpn_extension_after_empty_list",
+            tls_client_hello(&[], &[(16, b"\0\0"), (16, b"\0\x03\x02h2")]),
+        ),
+        ("empty_sni", tls_client_hello(&[], &[(0, b"\0\0")])),
+        (
+            "empty_unknown_server_name",
+            tls_client_hello(&[], &[(0, b"\0\x03\x01\0\0")]),
+        ),
+        (
+            "duplicate_sni_name_type",
+            tls_client_hello(&[], &[(0, b"\0\x08\0\0\x01a\0\0\x01b")]),
+        ),
+        (
+            "sni_trailing_dot",
+            tls_client_hello(&[], &[(0, b"\0\x05\0\0\x02a.")]),
+        ),
+        (
+            "sni_non_ascii",
+            tls_client_hello(&[], &[(0, b"\0\x04\0\0\x01\xff")]),
+        ),
+    ];
+
+    for (suffix, hello) in cases {
+        let result = CaptureCore::default().capture(
+            context(&format!("tls_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &hello,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedTls(_))));
+    }
+
+    let opaque_alpn = tls_client_hello(&[], &[(16, b"\0\x02\x01\xff")]);
+    let opaque_alpn_result = CaptureCore::default().capture(
+        context("tls_opaque_alpn", 443),
+        DirectionalData {
+            client_to_server: &opaque_alpn,
+            server_to_client: &[],
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        opaque_alpn_result,
+        Err(CaptureError::UnsupportedTls(_))
+    ));
+}
+
+#[test]
 fn malformed_and_truncated_fixtures_return_typed_errors() {
     let request = escaped_http(TRUNCATED_HTTP1_REQUEST);
     let http1 = CaptureCore::default().capture(
@@ -779,6 +844,34 @@ fn http2_field_semantics_and_push_promise_are_enforced() {
             "protocol_without_connect",
             b"\x82\x87\x84\x01\x0cfixture.test\x00\x09:protocol\x09websocket".as_slice(),
         ),
+        (
+            "missing_authority_with_host",
+            b"\x82\x87\x84\x00\x04host\x0cfixture.test".as_slice(),
+        ),
+        (
+            "scheme",
+            b"\x82\x06\x05ht tp\x84\x01\x0cfixture.test".as_slice(),
+        ),
+        (
+            "relative_path",
+            b"\x82\x87\x04\x08relative\x01\x0cfixture.test".as_slice(),
+        ),
+        (
+            "path_percent_encoding",
+            b"\x82\x87\x04\x04/%ZZ\x01\x0cfixture.test".as_slice(),
+        ),
+        (
+            "authority_whitespace",
+            b"\x82\x87\x84\x01\x08bad host".as_slice(),
+        ),
+        (
+            "authority_port",
+            b"\x82\x87\x84\x01\x12fixture.test:70000".as_slice(),
+        ),
+        (
+            "host_mismatch",
+            b"\x82\x87\x84\x01\x0cfixture.test\x00\x04host\x0aother.test".as_slice(),
+        ),
     ] {
         let request = h2_request(1, 0x05, method_headers, None);
         let result = CaptureCore::default().capture(
@@ -792,6 +885,21 @@ fn http2_field_semantics_and_push_promise_are_enforced() {
         );
         assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
     }
+
+    let options_request = h2_request(1, 0x05, b"\x02\x07OPTIONS\x87\x04\x01*", None);
+    let options_result = CaptureCore::default().capture(
+        context("h2_options_asterisk", 443),
+        DirectionalData {
+            client_to_server: &options_request,
+            server_to_client: &[],
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        options_result,
+        Err(CaptureError::UnsupportedHttp2(_))
+    ));
 
     let valid_client = h2_request(1, 0x05, &valid_headers, None);
     let mut invalid_status_server = h2_frame(4, 0, 0, &[]);
@@ -840,6 +948,144 @@ fn http2_field_semantics_and_push_promise_are_enforced() {
         None,
     );
     assert!(matches!(push, Err(CaptureError::UnsupportedHttp2(_))));
+
+    for (suffix, settings) in [
+        ("enable_push", [0, 2, 0, 0, 0, 2]),
+        ("initial_window", [0, 4, 0x80, 0, 0, 0]),
+        ("max_frame", [0, 5, 0, 0, 0, 100]),
+    ] {
+        let request = h2_request_with_settings(&settings, 1, 0x05, &valid_headers, None);
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_settings_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+    }
+
+    let client_push_enabled =
+        h2_request_with_settings(&[0, 2, 0, 0, 0, 1], 1, 0x05, &valid_headers, None);
+    CaptureCore::default()
+        .capture(
+            context("h2_client_push_enabled", 443),
+            DirectionalData {
+                client_to_server: &client_push_enabled,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("a client may advertise SETTINGS_ENABLE_PUSH=1");
+
+    let mut server_push_enabled = h2_frame(4, 0, 0, &[0, 2, 0, 0, 0, 1]);
+    server_push_enabled.extend(h2_frame(1, 0x05, 1, &[0x88]));
+    let server_push_enabled_result = CaptureCore::default().capture(
+        context("h2_server_push_enabled", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &server_push_enabled,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        server_push_enabled_result,
+        Err(CaptureError::MalformedHttp2(_))
+    ));
+
+    for (suffix, ping_payload, expected_ok) in [
+        ("empty", b"".as_slice(), false),
+        ("eight_bytes", b"12345678".as_slice(), true),
+    ] {
+        let mut request = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+        request.extend(h2_frame(4, 0, 0, &[]));
+        request.extend(h2_frame(6, 0, 0, ping_payload));
+        request.extend(h2_frame(1, 0x05, 1, &valid_headers));
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_ping_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        if expected_ok {
+            result.expect("eight-byte PING is valid and semantically ignorable");
+        } else {
+            assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+        }
+    }
+
+    for (suffix, dependency, expected_ok) in [("self", 1u32, false), ("root", 0u32, true)] {
+        let mut priority_headers = dependency.to_be_bytes().to_vec();
+        priority_headers.push(0);
+        priority_headers.extend_from_slice(&valid_headers);
+        let request = h2_request(1, 0x25, &priority_headers, None);
+        let result = CaptureCore::default().capture(
+            context(&format!("h2_headers_priority_{suffix}"), 443),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        if expected_ok {
+            result.expect("HEADERS may depend on the root stream");
+        } else {
+            assert!(matches!(result, Err(CaptureError::MalformedHttp2(_))));
+        }
+    }
+
+    let mut late_table_update_headers = valid_headers.to_vec();
+    late_table_update_headers.push(0x20);
+    let late_table_update = h2_request(1, 0x05, &late_table_update_headers, None);
+    let late_table_update_result = CaptureCore::default().capture(
+        context("h2_late_table_update", 443),
+        DirectionalData {
+            client_to_server: &late_table_update,
+            server_to_client: &[],
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        late_table_update_result,
+        Err(CaptureError::MalformedHttp2(_))
+    ));
+
+    let mut leading_table_update_headers = vec![0x20];
+    leading_table_update_headers.extend_from_slice(&valid_headers);
+    let leading_table_update = h2_request(1, 0x05, &leading_table_update_headers, None);
+    CaptureCore::default()
+        .capture(
+            context("h2_leading_table_update", 443),
+            DirectionalData {
+                client_to_server: &leading_table_update,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("an HPACK table size update is valid at the start of a field block");
+
+    let reserved_stream_bit = h2_request(0x8000_0001, 0x05, &valid_headers, None);
+    CaptureCore::default()
+        .capture(
+            context("h2_reserved_stream_bit", 443),
+            DirectionalData {
+                client_to_server: &reserved_stream_bit,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("receivers ignore the reserved stream identifier bit");
 }
 
 #[test]
@@ -944,14 +1190,68 @@ fn decode_hex(fixture: &str) -> Vec<u8> {
         .collect()
 }
 
+fn tls_client_hello(session_id: &[u8], extensions: &[(u16, &[u8])]) -> Vec<u8> {
+    let mut hello = vec![0x03, 0x03];
+    hello.extend_from_slice(&[0; 32]);
+    hello.push(u8::try_from(session_id.len()).expect("test session ID length fits u8"));
+    hello.extend_from_slice(session_id);
+    hello.extend_from_slice(&[0, 2, 0x13, 0x01]);
+    hello.extend_from_slice(&[1, 0]);
+
+    let extension_bytes = extensions.iter().fold(0usize, |total, (_, data)| {
+        total
+            .checked_add(4 + data.len())
+            .expect("test extension length fits usize")
+    });
+    hello.extend_from_slice(
+        &u16::try_from(extension_bytes)
+            .expect("test extension block fits u16")
+            .to_be_bytes(),
+    );
+    for (extension_type, data) in extensions {
+        hello.extend_from_slice(&extension_type.to_be_bytes());
+        hello.extend_from_slice(
+            &u16::try_from(data.len())
+                .expect("test extension data fits u16")
+                .to_be_bytes(),
+        );
+        hello.extend_from_slice(data);
+    }
+
+    let mut handshake = vec![1];
+    let hello_length = u32::try_from(hello.len()).expect("test ClientHello fits u24");
+    assert!(hello_length <= 0x00ff_ffff, "test ClientHello fits u24");
+    handshake.extend_from_slice(&hello_length.to_be_bytes()[1..]);
+    handshake.extend_from_slice(&hello);
+
+    let mut record = vec![22, 0x03, 0x01];
+    record.extend_from_slice(
+        &u16::try_from(handshake.len())
+            .expect("test TLS record fits u16")
+            .to_be_bytes(),
+    );
+    record.extend_from_slice(&handshake);
+    record
+}
+
 fn h2_request(
     stream_id: u32,
     header_flags: u8,
     header_block: &[u8],
     trailing_data: Option<(u8, &[u8])>,
 ) -> Vec<u8> {
+    h2_request_with_settings(&[], stream_id, header_flags, header_block, trailing_data)
+}
+
+fn h2_request_with_settings(
+    settings: &[u8],
+    stream_id: u32,
+    header_flags: u8,
+    header_block: &[u8],
+    trailing_data: Option<(u8, &[u8])>,
+) -> Vec<u8> {
     let mut bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
-    bytes.extend(h2_frame(4, 0, 0, &[]));
+    bytes.extend(h2_frame(4, 0, 0, settings));
     bytes.extend(h2_frame(1, header_flags, stream_id, header_block));
     if let Some((flags, payload)) = trailing_data {
         bytes.extend(h2_frame(0, flags, stream_id, payload));

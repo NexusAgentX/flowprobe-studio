@@ -117,12 +117,7 @@ fn decode_direction(
         let flags = remaining[4];
         let raw_stream_id =
             u32::from_be_bytes([remaining[5], remaining[6], remaining[7], remaining[8]]);
-        if raw_stream_id & 0x8000_0000 != 0 {
-            return Err(CaptureError::MalformedHttp2(
-                "reserved stream identifier bit is set",
-            ));
-        }
-        let stream_id = raw_stream_id;
+        let stream_id = raw_stream_id & 0x7fff_ffff;
         let payload = &remaining[9..frame_length];
         if frame_count == 1 && (frame_type != 4 || flags & FLAG_ACK != 0) {
             return Err(CaptureError::MalformedHttp2(
@@ -179,7 +174,7 @@ fn decode_direction(
                 if flags & FLAG_END_HEADERS == 0 {
                     return Err(CaptureError::UnsupportedHttp2("HEADERS continuation"));
                 }
-                let block = headers_payload(payload, flags)?;
+                let block = headers_payload(payload, flags, stream_id)?;
                 headers = Some(HeaderBlock {
                     stream_id,
                     fields: decode_hpack(block, side, limits)?,
@@ -188,12 +183,23 @@ fn decode_direction(
                     stream_ended = true;
                 }
             }
-            4 => validate_settings_frame(stream_id, flags, payload)?,
+            2 => validate_priority_frame(stream_id, payload)?,
+            3 => {
+                validate_rst_stream_frame(stream_id, payload)?;
+                return Err(CaptureError::UnsupportedHttp2(
+                    "RST_STREAM in the minimum v0 path",
+                ));
+            }
+            4 => validate_settings_frame(stream_id, flags, payload, side)?,
             5 => {
+                validate_push_promise_frame(stream_id, flags, payload, side, expected_stream)?;
                 return Err(CaptureError::UnsupportedHttp2(
                     "PUSH_PROMISE in the minimum v0 path",
                 ));
             }
+            6 => validate_ping_frame(stream_id, payload)?,
+            7 => validate_goaway_frame(stream_id, payload)?,
+            8 => validate_window_update_frame(payload)?,
             9 => {
                 return Err(CaptureError::UnsupportedHttp2(
                     "standalone CONTINUATION frame",
@@ -239,7 +245,12 @@ fn validate_data_stream(
     Ok(())
 }
 
-fn validate_settings_frame(stream_id: u32, flags: u8, payload: &[u8]) -> Result<(), CaptureError> {
+fn validate_settings_frame(
+    stream_id: u32,
+    flags: u8,
+    payload: &[u8],
+    side: HttpSide,
+) -> Result<(), CaptureError> {
     if stream_id != 0 {
         return Err(CaptureError::MalformedHttp2(
             "SETTINGS frame uses a non-zero stream",
@@ -250,16 +261,136 @@ fn validate_settings_frame(stream_id: u32, flags: u8, payload: &[u8]) -> Result<
             "acknowledged SETTINGS frame has a payload",
         ));
     }
-    if !payload.len().is_multiple_of(6) {
+    let (settings, remainder) = payload.as_chunks::<6>();
+    if !remainder.is_empty() {
         return Err(CaptureError::MalformedHttp2(
             "SETTINGS payload is not a sequence of six-byte parameters",
+        ));
+    }
+    for setting in settings {
+        let identifier = u16::from_be_bytes([setting[0], setting[1]]);
+        let value = u32::from_be_bytes([setting[2], setting[3], setting[4], setting[5]]);
+        match identifier {
+            2 if value > 1 || (side == HttpSide::Response && value == 1) => {
+                return Err(CaptureError::MalformedHttp2(
+                    "invalid SETTINGS_ENABLE_PUSH value",
+                ));
+            }
+            4 if value > 0x7fff_ffff => {
+                return Err(CaptureError::MalformedHttp2(
+                    "invalid SETTINGS_INITIAL_WINDOW_SIZE value",
+                ));
+            }
+            5 if !(16_384..=0x00ff_ffff).contains(&value) => {
+                return Err(CaptureError::MalformedHttp2(
+                    "invalid SETTINGS_MAX_FRAME_SIZE value",
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_priority_frame(stream_id: u32, payload: &[u8]) -> Result<(), CaptureError> {
+    if stream_id == 0 || payload.len() != 5 {
+        return Err(CaptureError::MalformedHttp2("invalid PRIORITY frame"));
+    }
+    let dependency =
+        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x7fff_ffff;
+    if dependency == stream_id {
+        return Err(CaptureError::MalformedHttp2(
+            "PRIORITY stream depends on itself",
         ));
     }
     Ok(())
 }
 
-fn headers_payload(payload: &[u8], flags: u8) -> Result<&[u8], CaptureError> {
-    let (padding, mut start) = if flags & FLAG_PADDED != 0 {
+fn validate_rst_stream_frame(stream_id: u32, payload: &[u8]) -> Result<(), CaptureError> {
+    if stream_id == 0 || payload.len() != 4 {
+        return Err(CaptureError::MalformedHttp2("invalid RST_STREAM frame"));
+    }
+    Ok(())
+}
+
+fn validate_push_promise_frame(
+    stream_id: u32,
+    flags: u8,
+    payload: &[u8],
+    side: HttpSide,
+    expected_stream: Option<u32>,
+) -> Result<(), CaptureError> {
+    if side != HttpSide::Response
+        || stream_id == 0
+        || expected_stream.is_some_and(|expected| expected != stream_id)
+    {
+        return Err(CaptureError::MalformedHttp2("invalid PUSH_PROMISE stream"));
+    }
+    let (padding, start) = if flags & FLAG_PADDED != 0 {
+        let Some(padding) = payload.first().copied() else {
+            return Err(CaptureError::MalformedHttp2(
+                "padded PUSH_PROMISE has no pad length",
+            ));
+        };
+        (usize::from(padding), 1usize)
+    } else {
+        (0usize, 0usize)
+    };
+    let end = payload
+        .len()
+        .checked_sub(padding)
+        .ok_or(CaptureError::MalformedHttp2(
+            "PUSH_PROMISE padding exceeds payload",
+        ))?;
+    let promised_end = start
+        .checked_add(4)
+        .ok_or(CaptureError::SizeOverflow("PUSH_PROMISE prefix"))?;
+    let promised = payload
+        .get(start..promised_end)
+        .filter(|_| promised_end <= end)
+        .ok_or(CaptureError::MalformedHttp2(
+            "PUSH_PROMISE has no promised stream identifier",
+        ))?;
+    let promised_stream =
+        u32::from_be_bytes([promised[0], promised[1], promised[2], promised[3]]) & 0x7fff_ffff;
+    if promised_stream == 0 || !promised_stream.is_multiple_of(2) {
+        return Err(CaptureError::MalformedHttp2(
+            "invalid promised stream identifier",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ping_frame(stream_id: u32, payload: &[u8]) -> Result<(), CaptureError> {
+    if stream_id != 0 || payload.len() != 8 {
+        return Err(CaptureError::MalformedHttp2("invalid PING frame"));
+    }
+    Ok(())
+}
+
+fn validate_goaway_frame(stream_id: u32, payload: &[u8]) -> Result<(), CaptureError> {
+    if stream_id != 0 || payload.len() < 8 {
+        return Err(CaptureError::MalformedHttp2("invalid GOAWAY frame"));
+    }
+    Ok(())
+}
+
+fn validate_window_update_frame(payload: &[u8]) -> Result<(), CaptureError> {
+    if payload.len() != 4 {
+        return Err(CaptureError::MalformedHttp2("invalid WINDOW_UPDATE frame"));
+    }
+    let increment =
+        u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x7fff_ffff;
+    if increment == 0 {
+        return Err(CaptureError::MalformedHttp2(
+            "WINDOW_UPDATE increment is zero",
+        ));
+    }
+    Ok(())
+}
+
+fn headers_payload(payload: &[u8], flags: u8, stream_id: u32) -> Result<&[u8], CaptureError> {
+    let (padding, start) = if flags & FLAG_PADDED != 0 {
         let Some(padding) = payload.first().copied() else {
             return Err(CaptureError::MalformedHttp2(
                 "padded HEADERS frame has no pad length",
@@ -269,11 +400,6 @@ fn headers_payload(payload: &[u8], flags: u8) -> Result<&[u8], CaptureError> {
     } else {
         (0usize, 0usize)
     };
-    if flags & FLAG_PRIORITY != 0 {
-        start = start
-            .checked_add(5)
-            .ok_or(CaptureError::SizeOverflow("HTTP/2 HEADERS prefix"))?;
-    }
     let end = payload
         .len()
         .checked_sub(padding)
@@ -285,6 +411,27 @@ fn headers_payload(payload: &[u8], flags: u8) -> Result<&[u8], CaptureError> {
             "HEADERS prefix exceeds payload",
         ));
     }
+    let start = if flags & FLAG_PRIORITY != 0 {
+        let priority_end = start
+            .checked_add(5)
+            .ok_or(CaptureError::SizeOverflow("HTTP/2 HEADERS prefix"))?;
+        let priority = payload
+            .get(start..priority_end)
+            .filter(|_| priority_end <= end)
+            .ok_or(CaptureError::MalformedHttp2(
+                "HEADERS priority prefix exceeds payload",
+            ))?;
+        let dependency =
+            u32::from_be_bytes([priority[0], priority[1], priority[2], priority[3]]) & 0x7fff_ffff;
+        if dependency == stream_id {
+            return Err(CaptureError::MalformedHttp2(
+                "HEADERS stream depends on itself",
+            ));
+        }
+        priority_end
+    } else {
+        start
+    };
     Ok(&payload[start..end])
 }
 
@@ -347,6 +494,11 @@ fn decode_hpack(
                 &mut regular_header_seen,
             )?;
         } else if first & 0x20 != 0 {
+            if !fields.is_empty() {
+                return Err(CaptureError::MalformedHttp2(
+                    "HPACK dynamic table size update follows a header field",
+                ));
+            }
             let size = decode_integer(block, &mut cursor, 5)?;
             if size > limits.max_hpack_dynamic_table_bytes {
                 return Err(CaptureError::UnsupportedHpack(
@@ -560,14 +712,28 @@ fn request_metadata(
     }
     let path = required_unique_text(fields, b":path", HttpSide::Request, "path")?;
     let scheme = required_unique_text(fields, b":scheme", HttpSide::Request, "scheme")?;
-    let authority = optional_unique_text(fields, b":authority", HttpSide::Request, "authority")?
-        .or(optional_unique_text(
-            fields,
-            b"host",
-            HttpSide::Request,
-            "host",
-        )?)
-        .ok_or(CaptureError::MalformedHttp2("request authority is missing"))?;
+    if method == "OPTIONS" && path == "*" {
+        return Err(CaptureError::UnsupportedHttp2(
+            "asterisk-form OPTIONS request in the minimum v0 path",
+        ));
+    }
+    if !is_valid_uri_scheme(&scheme) {
+        return Err(CaptureError::MalformedHttp2("invalid request scheme"));
+    }
+    if !is_valid_request_path(&scheme, &path) {
+        return Err(CaptureError::MalformedHttp2("invalid request path"));
+    }
+    let authority = required_unique_text(fields, b":authority", HttpSide::Request, "authority")?;
+    if !is_valid_authority(&authority, &scheme) {
+        return Err(CaptureError::MalformedHttp2("invalid request authority"));
+    }
+    if let Some(host) = optional_unique_text(fields, b"host", HttpSide::Request, "host")?
+        && !authority.eq_ignore_ascii_case(&host)
+    {
+        return Err(CaptureError::MalformedHttp2(
+            "host header differs from request authority",
+        ));
+    }
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Request, "content-type")?;
     validate_content_length(fields, byte_count, HttpSide::Request, true)?;
@@ -730,6 +896,160 @@ fn is_http_token_byte(byte: u8) -> bool {
                 | b'|'
                 | b'~'
         )
+}
+
+fn is_valid_uri_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
+fn is_valid_request_path(scheme: &str, path: &str) -> bool {
+    if (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && !path.starts_with('/')
+    {
+        return false;
+    }
+    is_valid_path_and_query(path.as_bytes())
+}
+
+fn is_valid_path_and_query(value: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    while let Some(byte) = value.get(cursor).copied() {
+        if byte == b'%' {
+            let Some(first) = value.get(cursor + 1) else {
+                return false;
+            };
+            let Some(second) = value.get(cursor + 2) else {
+                return false;
+            };
+            if !first.is_ascii_hexdigit() || !second.is_ascii_hexdigit() {
+                return false;
+            }
+            cursor += 3;
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+                    | b'?'
+            ))
+        {
+            return false;
+        }
+        cursor += 1;
+    }
+    true
+}
+
+fn is_valid_authority(authority: &str, scheme: &str) -> bool {
+    let bytes = authority.as_bytes();
+    if bytes.is_empty()
+        || !bytes.is_ascii()
+        || bytes
+            .iter()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || bytes
+            .iter()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'\\'))
+        || ((scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+            && bytes.contains(&b'@'))
+    {
+        return false;
+    }
+
+    if bytes.starts_with(b"[") {
+        let Some(closing) = bytes.iter().position(|byte| *byte == b']') else {
+            return false;
+        };
+        if closing == 1 {
+            return false;
+        }
+        let suffix = &bytes[closing + 1..];
+        return suffix.is_empty()
+            || (suffix.starts_with(b":")
+                && suffix.len() > 1
+                && suffix[1..].iter().all(u8::is_ascii_digit));
+    }
+
+    if bytes.contains(&b'[') || bytes.contains(&b']') {
+        return false;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => {
+            if host.contains(':')
+                || port.is_empty()
+                || !port.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return false;
+            }
+            (host.as_bytes(), Some(port))
+        }
+        None => (bytes, None),
+    };
+    if host.is_empty() || !is_valid_reg_name(host) {
+        return false;
+    }
+    port.is_none_or(|value| value.parse::<u16>().is_ok())
+}
+
+fn is_valid_reg_name(value: &[u8]) -> bool {
+    let mut cursor = 0usize;
+    while let Some(byte) = value.get(cursor).copied() {
+        if byte == b'%' {
+            let Some(first) = value.get(cursor + 1) else {
+                return false;
+            };
+            let Some(second) = value.get(cursor + 2) else {
+                return false;
+            };
+            if !first.is_ascii_hexdigit() || !second.is_ascii_hexdigit() {
+                return false;
+            }
+            cursor += 3;
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+            ))
+        {
+            return false;
+        }
+        cursor += 1;
+    }
+    true
 }
 
 fn static_header(index: usize) -> Option<(&'static [u8], &'static [u8])> {
