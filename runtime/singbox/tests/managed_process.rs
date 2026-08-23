@@ -94,11 +94,33 @@ impl TestDirectory {
     }
 
     fn recorded_pid(&self, name: &str) -> i32 {
-        fs::read_to_string(self.root.join(name))
+        self.recorded_pid_if_present(name)
             .expect("recorded process id should exist")
-            .trim()
-            .parse()
-            .expect("recorded process id should be numeric")
+    }
+
+    fn recorded_pid_if_present(&self, name: &str) -> Option<i32> {
+        match fs::read_to_string(self.root.join(name)) {
+            Ok(process_id) => Some(
+                process_id
+                    .trim()
+                    .parse()
+                    .expect("recorded process id should be numeric"),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("recorded process id should be readable: {error}"),
+        }
+    }
+
+    fn wait_for_marker(&self, name: &str) {
+        let marker = self.root.join(name);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.is_file() {
+            assert!(
+                Instant::now() < deadline,
+                "fake runtime did not write {name} in time"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -156,6 +178,12 @@ fn assert_process_gone(process_id: i32) {
             }
             Err(error) => panic!("process liveness check failed: {error}"),
         }
+    }
+}
+
+fn assert_recorded_process_gone_if_present(directory: &TestDirectory, name: &str) {
+    if let Some(process_id) = directory.recorded_pid_if_present(name) {
+        assert_process_gone(process_id);
     }
 }
 
@@ -353,8 +381,8 @@ fn command_timeout_and_output_limit_are_typed_and_processes_are_cleaned_up() {
             timeout_ms: 50,
         })
     );
-    assert_process_gone(timeout_directory.recorded_pid("last-pid"));
-    assert_process_gone(timeout_directory.recorded_pid("descendant-pid"));
+    assert_recorded_process_gone_if_present(&timeout_directory, "last-pid");
+    assert_recorded_process_gone_if_present(&timeout_directory, "descendant-pid");
 
     let output_directory = TestDirectory::new("version_large");
     let mut output_options = output_directory.options();
@@ -462,6 +490,28 @@ fn stop_escalates_to_kill_for_a_process_that_ignores_termination() {
         RuntimeState::Stopped { generation: 1 }
     );
     assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(directory.runtime_config_files().is_empty());
+}
+
+#[test]
+fn stop_kills_term_ignoring_descendant_after_leader_exits() {
+    let directory = TestDirectory::new("run_leader_exits_descendant_ignores_term");
+    let mut options = directory.options();
+    options.stop_timeout = Duration::from_millis(100);
+    let runtime = SingBoxRuntime::new(options).expect("runtime should initialize");
+    runtime
+        .start(&unchecked_config("{}"))
+        .expect("runtime with a descendant should start");
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+
+    assert_eq!(
+        runtime.stop().expect("process group stop should succeed"),
+        RuntimeState::Stopped { generation: 1 }
+    );
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
     assert!(directory.runtime_config_files().is_empty());
 }
 
@@ -575,8 +625,8 @@ fn check_timeout_maps_to_validator_unavailable_without_committing_a_config() {
         RuntimeConfigValidator::validate(&runtime, r#"{"password":"not-a-real-secret"}"#),
         Err(RuntimeValidationFailure::Unavailable)
     );
-    assert_process_gone(directory.recorded_pid("last-pid"));
-    assert_process_gone(directory.recorded_pid("descendant-pid"));
+    assert_recorded_process_gone_if_present(&directory, "last-pid");
+    assert_recorded_process_gone_if_present(&directory, "descendant-pid");
     assert!(directory.runtime_config_files().is_empty());
 }
 
@@ -628,6 +678,26 @@ fn drop_stops_the_managed_process_and_removes_its_private_config() {
         process_id = directory.recorded_pid("last-pid");
     }
     assert_process_gone(process_id);
+    assert!(directory.runtime_config_files().is_empty());
+}
+
+#[test]
+fn drop_kills_term_ignoring_descendant_after_leader_exits() {
+    let directory = TestDirectory::new("run_leader_exits_descendant_ignores_term");
+    let leader_pid;
+    let descendant_pid;
+    {
+        let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
+        runtime
+            .start(&unchecked_config("{}"))
+            .expect("runtime with a descendant should start");
+        directory.wait_for_marker("group-cleanup-ready");
+        leader_pid = directory.recorded_pid("last-pid");
+        descendant_pid = directory.recorded_pid("descendant-pid");
+    }
+
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
     assert!(directory.runtime_config_files().is_empty());
 }
 

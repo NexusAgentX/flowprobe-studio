@@ -18,7 +18,9 @@ configured. The real local-target end-to-end direct-path proof belongs to
 product endpoint.
 
 On Unix, the adapter uses the MIT-licensed `nix` crate only for process-group
-`SIGTERM`/`SIGKILL` cleanup. It adds no privileged networking, TLS, or sing-box
-library dependency. Non-Unix builds still bound and clean up the managed child,
-but platform-specific descendant-tree lifecycle hardening remains part of the
-cross-platform runtime work in v0.2.
+`SIGTERM`/`SIGKILL` cleanup. After the bounded grace period it escalates the
+original process group even if the group leader already exited, so a stubborn
+descendant is not mistaken for a stopped runtime. It adds no privileged
+networking, TLS, or sing-box library dependency. Non-Unix builds still bound
+and clean up the managed child, but platform-specific descendant-tree lifecycle
+hardening remains part of the cross-platform runtime work in v0.2.

@@ -111,6 +111,21 @@ case "$subcommand" in
         trap '' TERM HUP INT
         while :; do sleep 1; done
         ;;
+      run_leader_exits_descendant_ignores_term)
+        trap 'exit 0' TERM HUP INT
+        (
+          trap '' TERM HUP INT
+          : > "$fixture_directory/descendant-ready"
+          while :; do sleep 1; done
+        ) &
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        while [ ! -f "$fixture_directory/descendant-ready" ]; do
+          sleep 0.01
+        done
+        : > "$fixture_directory/group-cleanup-ready"
+        while :; do sleep 1; done
+        ;;
       *)
         trap 'exit 0' TERM HUP INT
         while :; do sleep 1; done

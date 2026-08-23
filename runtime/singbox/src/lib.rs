@@ -786,6 +786,44 @@ fn wait_until(
     }
 }
 
+#[cfg(unix)]
+fn terminate_child(
+    child: &mut Child,
+    operation: RuntimeOperation,
+    timeout: Duration,
+) -> RuntimeResult<()> {
+    let process_group = process_group_id(child, operation)?;
+    let mut leader_reaped = child
+        .try_wait()
+        .map_err(|error| process_io(operation, &error))?
+        .is_some();
+
+    let started = Instant::now();
+    signal_process_group(process_group, operation, Signal::SIGTERM)?;
+    let graceful_timeout = timeout / 2;
+    leader_reaped |= reap_leader_through_grace(child, graceful_timeout, operation)?;
+
+    // The leader can exit promptly on SIGTERM while a descendant in the same
+    // process group ignores it. Always escalate the original process group
+    // after the grace period instead of treating the leader's exit as proof
+    // that the whole managed runtime stopped.
+    signal_process_group(process_group, operation, Signal::SIGKILL)?;
+    if leader_reaped {
+        return Ok(());
+    }
+
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if wait_until(child, remaining, operation)?.is_some() {
+        Ok(())
+    } else {
+        Err(RuntimeError::TimedOut {
+            operation,
+            timeout_ms: duration_millis(timeout, operation)?,
+        })
+    }
+}
+
+#[cfg(not(unix))]
 fn terminate_child(
     child: &mut Child,
     operation: RuntimeOperation,
@@ -799,21 +837,39 @@ fn terminate_child(
         return Ok(());
     }
 
-    let started = Instant::now();
-    send_termination(child, operation)?;
-    let graceful_timeout = timeout / 2;
-    if wait_until(child, graceful_timeout, operation)?.is_some() {
-        return Ok(());
-    }
-    force_termination(child, operation)?;
-    let remaining = timeout.saturating_sub(started.elapsed());
-    if wait_until(child, remaining, operation)?.is_some() {
+    child
+        .kill()
+        .map_err(|error| process_io(operation, &error))?;
+    if wait_until(child, timeout, operation)?.is_some() {
         Ok(())
     } else {
         Err(RuntimeError::TimedOut {
             operation,
             timeout_ms: duration_millis(timeout, operation)?,
         })
+    }
+}
+
+#[cfg(unix)]
+fn reap_leader_through_grace(
+    child: &mut Child,
+    timeout: Duration,
+    operation: RuntimeOperation,
+) -> RuntimeResult<bool> {
+    let started = Instant::now();
+    let mut leader_reaped = false;
+    loop {
+        if !leader_reaped {
+            leader_reaped = child
+                .try_wait()
+                .map_err(|error| process_io(operation, &error))?
+                .is_some();
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(leader_reaped);
+        }
+        thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
 }
 
@@ -830,34 +886,19 @@ fn cleanup_active_config(
 }
 
 #[cfg(unix)]
-fn send_termination(child: &mut Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    signal_process_group(child, operation, Signal::SIGTERM)
-}
-
-#[cfg(not(unix))]
-fn send_termination(child: &mut Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    child.kill().map_err(|error| process_io(operation, &error))
-}
-
-#[cfg(unix)]
-fn force_termination(child: &mut Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    signal_process_group(child, operation, Signal::SIGKILL)
-}
-
-#[cfg(not(unix))]
-fn force_termination(child: &mut Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    child.kill().map_err(|error| process_io(operation, &error))
+fn process_group_id(child: &Child, operation: RuntimeOperation) -> RuntimeResult<Pid> {
+    let process_id =
+        i32::try_from(child.id()).map_err(|_| RuntimeError::InternalState { operation })?;
+    Ok(Pid::from_raw(process_id))
 }
 
 #[cfg(unix)]
 fn signal_process_group(
-    child: &Child,
+    process_group: Pid,
     operation: RuntimeOperation,
     signal: Signal,
 ) -> RuntimeResult<()> {
-    let process_id =
-        i32::try_from(child.id()).map_err(|_| RuntimeError::InternalState { operation })?;
-    match killpg(Pid::from_raw(process_id), signal) {
+    match killpg(process_group, signal) {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
         Err(Errno::EPERM) => Err(RuntimeError::Unavailable {
             operation,
@@ -871,8 +912,17 @@ fn signal_process_group(
 }
 
 #[cfg(unix)]
+fn signal_child_process_group(
+    child: &Child,
+    operation: RuntimeOperation,
+    signal: Signal,
+) -> RuntimeResult<()> {
+    signal_process_group(process_group_id(child, operation)?, operation, signal)
+}
+
+#[cfg(unix)]
 fn force_remaining_process_group(child: &Child, operation: RuntimeOperation) -> RuntimeResult<()> {
-    signal_process_group(child, operation, Signal::SIGKILL)
+    signal_child_process_group(child, operation, Signal::SIGKILL)
 }
 
 #[cfg(not(unix))]
