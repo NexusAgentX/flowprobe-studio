@@ -1,6 +1,6 @@
 {
   "identifier": "main-window",
-  "description": "Minimum non-privileged capability set for the main renderer",
+  "description": "Fail-closed capability for the local main renderer",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": []
 }

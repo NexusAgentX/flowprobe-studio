@@ -105,11 +105,7 @@ impl TrafficService {
             .store
             .query_semantic_events(&query)
             .map_err(|_| storage_unavailable())?;
-        let items = page
-            .items
-            .into_iter()
-            .map(semantic_output)
-            .collect::<Result<Vec<_>, _>>()?;
+        let items = page.items.into_iter().map(semantic_output).collect();
         let next_cursor = page
             .next_cursor
             .map(|cursor| state.semantic_cursors.insert(cursor));
@@ -229,15 +225,8 @@ fn flow_detail(record: &FlowIndexRecord) -> TrafficDetail {
     }
 }
 
-fn semantic_output(record: SemanticEventRecord) -> Result<SemanticOutputItem, IpcError> {
-    let attributes_json = serde_json::to_string_pretty(&record.attributes).map_err(|_| {
-        IpcError::new(
-            IpcErrorCode::StorageUnavailable,
-            "semantic metadata could not be encoded",
-        )
-    })?;
-
-    Ok(SemanticOutputItem {
+fn semantic_output(record: SemanticEventRecord) -> SemanticOutputItem {
+    SemanticOutputItem {
         event_id: record.event_id.as_str().to_owned(),
         capture_session_id: record
             .capture_session_id
@@ -252,8 +241,7 @@ fn semantic_output(record: SemanticEventRecord) -> Result<SemanticOutputItem, Ip
         namespace: record.namespace,
         kind: record.kind,
         timestamp_ns: record.timestamp.0.to_string(),
-        attributes_json,
-    })
+    }
 }
 
 fn invalid_flow_cursor() -> IpcError {
@@ -462,7 +450,9 @@ mod tests {
             .expect("semantic page");
         assert_eq!(first.items[0].event_id, "semantic_new");
         assert_eq!(first.items[0].source_flow_id.as_deref(), Some("flow_new"));
-        assert!(first.items[0].attributes_json.contains("fixture analyzed"));
+        let renderer_value = serde_json::to_value(&first.items[0]).expect("output serializes");
+        assert!(renderer_value.get("attributesJson").is_none());
+        assert!(renderer_value.get("attributes_json").is_none());
 
         let second = service
             .query_semantic_output(SemanticPageRequest {

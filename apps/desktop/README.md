@@ -8,10 +8,18 @@ no SQLite, filesystem, network-runtime, or trust-store capability. It can only:
 - request one metadata-only flow detail by identity;
 - request bounded pages of rebuildable semantic analyzer output.
 
+The local `main` window capability has an empty permission list and no remote
+origins. This denies Tauri core and plugin permissions by default. The four
+application-specific commands above remain explicit local
+`invoke_handler` commands in the Tauri host; each command accepts a typed,
+host-validated request rather than granting a general renderer capability.
+
 Rust DTOs in `crates/ipc` generate the checked-in TypeScript client under
 `src/ipc/generated.ts`. The Rust binding test fails if those two sides drift.
 Traffic cursors are opaque, bounded host-side tokens; request/response payload
-references and database layout do not cross into the renderer.
+references and database layout do not cross into the renderer. Arbitrary
+analyzer attribute objects also remain host-side: the ordinary Analyze list
+only receives event identity, provenance, namespace, kind, and timestamp.
 
 The Tauri host opens the host-owned metadata database in the platform app-data
 directory. Empty stores produce honest empty states; the UI does not seed demo

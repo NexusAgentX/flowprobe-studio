@@ -23,7 +23,7 @@ export type TrafficDetail = { summary: TrafficListItem, connectionId: string, ca
 
 export type SemanticPageRequest = { pageSize: number, cursor: string | null, };
 
-export type SemanticOutputItem = { eventId: string, captureSessionId: string | null, sourceFlowId: string | null, analyzerId: string, analyzerVersion: string, namespace: string, kind: string, timestampNs: string, attributesJson: string, };
+export type SemanticOutputItem = { eventId: string, captureSessionId: string | null, sourceFlowId: string | null, analyzerId: string, analyzerVersion: string, namespace: string, kind: string, timestampNs: string, };
 
 export type SemanticOutputPage = { items: Array<SemanticOutputItem>, nextCursor: string | null, };
 

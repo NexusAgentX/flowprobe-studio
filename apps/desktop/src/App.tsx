@@ -87,35 +87,52 @@ export function App({ client = desktopClient, initialSurface = "capture" }: AppP
   const [semanticCursor, setSemanticCursor] = useState<string | null>(null);
   const [semanticPhase, setSemanticPhase] = useState<LoadPhase>("loading");
   const [semanticError, setSemanticError] = useState<string | null>(null);
+  const statusRequestSequence = useRef(0);
+  const trafficRequestSequence = useRef(0);
   const detailRequestSequence = useRef(0);
+  const semanticRequestSequence = useRef(0);
 
   const refreshStatus = useCallback(() => {
+    const sequence = statusRequestSequence.current + 1;
+    statusRequestSequence.current = sequence;
+    setStatus(null);
     setStatusError(null);
     void client
       .getAppStatus()
       .then((nextStatus) => {
-        setStatus(nextStatus);
+        if (statusRequestSequence.current === sequence) {
+          setStatus(nextStatus);
+        }
       })
       .catch((reason: unknown) => {
-        setStatus(null);
-        setStatusError(describeIpcFailure(reason));
+        if (statusRequestSequence.current === sequence) {
+          setStatus(null);
+          setStatusError(describeIpcFailure(reason));
+        }
       });
   }, [client]);
 
   const requestTraffic = useCallback(
     (cursor: string | null, append: boolean) => {
+      const sequence = trafficRequestSequence.current + 1;
+      trafficRequestSequence.current = sequence;
       setTrafficPhase(append ? "loadingMore" : "loading");
       setTrafficError(null);
+      setTrafficCursor(null);
       void client
         .queryTraffic({ pageSize: TRAFFIC_PAGE_SIZE, cursor })
         .then((page) => {
-          setTrafficItems((current) => (append ? appendTrafficItems(current, page.items) : page.items));
-          setTrafficCursor(page.nextCursor);
-          setTrafficPhase("ready");
+          if (trafficRequestSequence.current === sequence) {
+            setTrafficItems((current) => (append ? appendTrafficItems(current, page.items) : page.items));
+            setTrafficCursor(page.nextCursor);
+            setTrafficPhase("ready");
+          }
         })
         .catch((reason: unknown) => {
-          setTrafficError(describeIpcFailure(reason));
-          setTrafficPhase("error");
+          if (trafficRequestSequence.current === sequence) {
+            setTrafficError(describeIpcFailure(reason));
+            setTrafficPhase("error");
+          }
         });
     },
     [client],
@@ -123,18 +140,25 @@ export function App({ client = desktopClient, initialSurface = "capture" }: AppP
 
   const requestSemanticOutput = useCallback(
     (cursor: string | null, append: boolean) => {
+      const sequence = semanticRequestSequence.current + 1;
+      semanticRequestSequence.current = sequence;
       setSemanticPhase(append ? "loadingMore" : "loading");
       setSemanticError(null);
+      setSemanticCursor(null);
       void client
         .querySemanticOutput({ pageSize: SEMANTIC_PAGE_SIZE, cursor })
         .then((page) => {
-          setSemanticItems((current) => (append ? appendSemanticItems(current, page.items) : page.items));
-          setSemanticCursor(page.nextCursor);
-          setSemanticPhase("ready");
+          if (semanticRequestSequence.current === sequence) {
+            setSemanticItems((current) => (append ? appendSemanticItems(current, page.items) : page.items));
+            setSemanticCursor(page.nextCursor);
+            setSemanticPhase("ready");
+          }
         })
         .catch((reason: unknown) => {
-          setSemanticError(describeIpcFailure(reason));
-          setSemanticPhase("error");
+          if (semanticRequestSequence.current === sequence) {
+            setSemanticError(describeIpcFailure(reason));
+            setSemanticPhase("error");
+          }
         });
     },
     [client],
@@ -178,6 +202,13 @@ export function App({ client = desktopClient, initialSurface = "capture" }: AppP
     refreshStatus();
     requestTraffic(null, false);
     requestSemanticOutput(null, false);
+
+    return () => {
+      statusRequestSequence.current += 1;
+      trafficRequestSequence.current += 1;
+      detailRequestSequence.current += 1;
+      semanticRequestSequence.current += 1;
+    };
   }, [refreshStatus, requestSemanticOutput, requestTraffic]);
 
   useEffect(() => {
@@ -227,7 +258,7 @@ export function App({ client = desktopClient, initialSurface = "capture" }: AppP
                   }}
                 >
                   <span>{surface.label}</span>
-                  <kbd>{surface.shortcut}</kbd>
+                  <kbd aria-hidden="true">{surface.shortcut}</kbd>
                 </button>
               </li>
             ))}
@@ -616,7 +647,6 @@ export function AnalyzeSurface({ items, cursor, phase, error, onRefresh, onLoadM
             <p className="semantic-source">
               {item.analyzerId} {item.analyzerVersion} · source {item.sourceFlowId ?? item.captureSessionId ?? "global"}
             </p>
-            <pre aria-label={`Attributes for ${item.kind}`}>{item.attributesJson}</pre>
           </article>
         ))}
       </div>

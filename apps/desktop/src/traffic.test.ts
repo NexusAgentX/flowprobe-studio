@@ -32,7 +32,6 @@ function semantic(eventId: string): SemanticOutputItem {
     namespace: "flowprobe.demo",
     kind: "summary",
     timestampNs: "1720000000000000000",
-    attributesJson: "{}",
   };
 }
 

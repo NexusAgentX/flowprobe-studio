@@ -57,3 +57,30 @@ pub fn run() -> Result<(), tauri::Error> {
         ])
         .run(tauri::generate_context!())
 }
+
+#[cfg(test)]
+mod tests {
+    use tauri::utils::acl::capability::CapabilityFile;
+
+    #[test]
+    fn main_renderer_capability_is_local_and_fail_closed() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities")
+            .join("default.json");
+        let capability = match CapabilityFile::load(path)
+            .expect("main renderer capability must match Tauri's current schema")
+        {
+            CapabilityFile::Capability(capability) => capability,
+            CapabilityFile::List(_) | CapabilityFile::NamedList { .. } => {
+                panic!("main renderer capability must contain exactly one capability")
+            }
+        };
+
+        assert_eq!(capability.identifier, "main-window");
+        assert_eq!(capability.windows, ["main"]);
+        assert!(capability.webviews.is_empty());
+        assert!(capability.local);
+        assert!(capability.remote.is_none());
+        assert!(capability.permissions.is_empty());
+    }
+}

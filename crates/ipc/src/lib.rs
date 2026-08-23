@@ -137,7 +137,6 @@ pub struct SemanticOutputItem {
     pub namespace: String,
     pub kind: String,
     pub timestamp_ns: String,
-    pub attributes_json: String,
 }
 
 /// One bounded semantic-output page.
@@ -207,8 +206,8 @@ export function querySemanticOutput(request: SemanticPageRequest): Promise<Seman
 #[cfg(test)]
 mod tests {
     use super::{
-        AppStatus, IpcError, IpcErrorCode, SubsystemAvailability, SupervisorLifecycle,
-        TrafficPageRequest, typescript_bindings,
+        AppStatus, IpcError, IpcErrorCode, SemanticOutputItem, SubsystemAvailability,
+        SupervisorLifecycle, TrafficPageRequest, typescript_bindings,
     };
 
     #[test]
@@ -242,6 +241,31 @@ mod tests {
         let error_value = serde_json::to_value(error).expect("error should serialize");
         assert_eq!(error_value["code"], "invalidCursor");
         assert_eq!(error_value["message"], "traffic cursor is invalid");
+    }
+
+    #[test]
+    fn ordinary_semantic_output_excludes_arbitrary_analyzer_attributes() {
+        let output = SemanticOutputItem {
+            event_id: "event-1".to_owned(),
+            capture_session_id: Some("session-1".to_owned()),
+            source_flow_id: Some("flow-1".to_owned()),
+            analyzer_id: "demo".to_owned(),
+            analyzer_version: "0.1.0".to_owned(),
+            namespace: "flowprobe.demo".to_owned(),
+            kind: "summary".to_owned(),
+            timestamp_ns: "42".to_owned(),
+        };
+
+        let value = serde_json::to_value(output).expect("semantic output should serialize");
+        assert_eq!(
+            value
+                .as_object()
+                .expect("semantic output is an object")
+                .len(),
+            8
+        );
+        assert!(value.get("attributesJson").is_none());
+        assert!(value.get("attributes_json").is_none());
     }
 
     #[test]
