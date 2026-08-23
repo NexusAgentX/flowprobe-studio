@@ -63,6 +63,9 @@ jobs:
         with:
           toolchain: 1.98.0
           components: clippy,rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint workspace
@@ -71,6 +74,8 @@ jobs:
         run: cargo check --workspace
       - name: Test workspace
         run: cargo test --workspace
+      - name: Test isolated v0.1 architecture proof
+        run: python scripts/check_v0_1_integration.py
 
   desktop:
     name: Desktop renderer
