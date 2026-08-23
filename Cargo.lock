@@ -777,6 +777,7 @@ name = "flowprobe-desktop"
 version = "0.1.0"
 dependencies = [
  "flowprobe-ipc",
+ "flowprobe-storage",
  "flowprobe-supervisor",
  "tauri",
  "tauri-build",
@@ -813,6 +814,9 @@ name = "flowprobe-supervisor"
 version = "0.1.0"
 dependencies = [
  "flowprobe-ipc",
+ "flowprobe-model",
+ "flowprobe-storage",
+ "serde_json",
 ]
 
 [[package]]

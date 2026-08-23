@@ -8,6 +8,11 @@ publish.workspace = true
 
 [dependencies]
 flowprobe-ipc = { path = "../ipc" }
+flowprobe-model = { path = "../model" }
+flowprobe-storage = { path = "../storage" }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

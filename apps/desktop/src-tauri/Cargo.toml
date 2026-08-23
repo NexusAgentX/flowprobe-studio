@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 flowprobe-ipc = { path = "../../../crates/ipc" }
+flowprobe-storage = { path = "../../../crates/storage" }
 flowprobe-supervisor = { path = "../../../crates/supervisor" }
 tauri.workspace = true
 
