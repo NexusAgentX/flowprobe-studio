@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use flowprobe_model::{
-    DestinationMetadata, HttpRequestMetadata, HttpResponseMetadata, HttpStatus,
-    HttpTransactionMetadata,
+    HttpRequestMetadata, HttpResponseMetadata, HttpStatus, HttpTransactionMetadata,
 };
 
-use crate::{CaptureContext, CaptureError, CaptureLimits, HttpSide};
+use crate::{CaptureError, CaptureLimits, HttpSide};
 
 const CLIENT_PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const FLAG_ACK: u8 = 0x01;
+const FLAG_END_STREAM: u8 = 0x01;
 const FLAG_END_HEADERS: u8 = 0x04;
 const FLAG_PADDED: u8 = 0x08;
 const FLAG_PRIORITY: u8 = 0x20;
@@ -20,8 +20,6 @@ pub(crate) fn is_client_preface(input: &[u8]) -> bool {
 pub(crate) fn decode(
     client: &[u8],
     server: &[u8],
-    context: &CaptureContext,
-    is_tls: bool,
     limits: &CaptureLimits,
 ) -> Result<HttpTransactionMetadata, CaptureError> {
     let request_side = decode_direction(
@@ -36,12 +34,7 @@ pub(crate) fn decode(
         .ok_or(CaptureError::MalformedHttp2(
             "request HEADERS frame is missing",
         ))?;
-    let request = request_metadata(
-        &request_headers.fields,
-        request_side.body_bytes,
-        context,
-        is_tls,
-    )?;
+    let request = request_metadata(&request_headers.fields, request_side.body_bytes)?;
 
     let response_side = decode_direction(
         server,
@@ -88,6 +81,7 @@ fn decode_direction(
     let mut frame_count = 0usize;
     let mut headers: Option<HeaderBlock> = None;
     let mut body_bytes = 0u64;
+    let mut stream_ended = false;
     while !remaining.is_empty() {
         frame_count = frame_count
             .checked_add(1)
@@ -130,6 +124,11 @@ fn decode_direction(
         let payload = &remaining[9..frame_length];
         match frame_type {
             0 => {
+                if stream_ended {
+                    return Err(CaptureError::MalformedHttp2(
+                        "DATA frame follows END_STREAM",
+                    ));
+                }
                 validate_data_stream(stream_id, expected_stream, headers.as_ref())?;
                 let data = unpad_payload(payload, flags)?;
                 body_bytes = body_bytes
@@ -145,6 +144,9 @@ fn decode_direction(
                         limit: limits.max_http_body_bytes,
                     });
                 }
+                if flags & FLAG_END_STREAM != 0 {
+                    stream_ended = true;
+                }
             }
             1 => {
                 if stream_id == 0 {
@@ -155,6 +157,11 @@ fn decode_direction(
                 if expected_stream.is_some_and(|expected| expected != stream_id) {
                     return Err(CaptureError::UnsupportedHttp2(
                         "response on a different stream",
+                    ));
+                }
+                if side == HttpSide::Request && stream_id.is_multiple_of(2) {
+                    return Err(CaptureError::MalformedHttp2(
+                        "client request uses an even stream identifier",
                     ));
                 }
                 if headers.is_some() {
@@ -170,6 +177,9 @@ fn decode_direction(
                     stream_id,
                     fields: decode_hpack(block, side, limits)?,
                 });
+                if flags & FLAG_END_STREAM != 0 {
+                    stream_ended = true;
+                }
             }
             4 => validate_settings_frame(stream_id, flags, payload)?,
             9 => {
@@ -180,6 +190,12 @@ fn decode_direction(
             _ => {}
         }
         remaining = &remaining[frame_length..];
+    }
+
+    if headers.is_some() && !stream_ended {
+        return Err(CaptureError::UnsupportedHttp2(
+            "incomplete stream without END_STREAM",
+        ));
     }
 
     Ok(ParsedDirection {
@@ -487,13 +503,10 @@ fn decode_string(
 fn request_metadata(
     fields: &[HeaderField],
     byte_count: u64,
-    context: &CaptureContext,
-    is_tls: bool,
 ) -> Result<HttpRequestMetadata, CaptureError> {
     let method = required_unique_text(fields, b":method", HttpSide::Request, "method")?;
     let path = required_unique_text(fields, b":path", HttpSide::Request, "path")?;
-    let scheme = optional_unique_text(fields, b":scheme", HttpSide::Request, "scheme")?
-        .unwrap_or_else(|| if is_tls { "https" } else { "http" }.to_owned());
+    let scheme = required_unique_text(fields, b":scheme", HttpSide::Request, "scheme")?;
     let authority = optional_unique_text(fields, b":authority", HttpSide::Request, "authority")?
         .or(optional_unique_text(
             fields,
@@ -501,7 +514,7 @@ fn request_metadata(
             HttpSide::Request,
             "host",
         )?)
-        .unwrap_or_else(|| destination_authority(&context.destination, &scheme));
+        .ok_or(CaptureError::MalformedHttp2("request authority is missing"))?;
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Request, "content-type")?;
     Ok(HttpRequestMetadata {
@@ -571,27 +584,6 @@ fn optional_unique_text(
         value = Some(text.to_owned());
     }
     Ok(value)
-}
-
-fn destination_authority(destination: &DestinationMetadata, scheme: &str) -> String {
-    let host = if let Some(host) = &destination.host {
-        host.clone()
-    } else if let Some(ip) = destination.ip {
-        if ip.is_ipv6() {
-            format!("[{ip}]")
-        } else {
-            ip.to_string()
-        }
-    } else {
-        String::new()
-    };
-    if (scheme == "http" && destination.port == 80)
-        || (scheme == "https" && destination.port == 443)
-    {
-        host
-    } else {
-        format!("{host}:{}", destination.port)
-    }
 }
 
 fn read_u24(bytes: &[u8]) -> usize {

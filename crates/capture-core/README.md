@@ -11,11 +11,15 @@ successful interception boundary. A passed-through TLS connection therefore
 emits connection and TLS metadata without pretending that encrypted bytes are
 HTTP. HPACK supports the static table and non-Huffman literal forms needed by
 the minimum v0 path; unsupported dynamic references, Huffman strings, and
-continued header blocks return structured errors.
+continued header blocks return structured errors. This path also requires an
+odd client stream identifier, ordinary request pseudo-headers, and a complete
+END_STREAM transition. Text protocols without a structural HTTP/1.0 or
+HTTP/1.1 request line remain opaque connections.
 
 Every session has per-direction pending-byte backpressure. Header bytes,
 header count, body bytes, HTTP/2 frame payload/count, HPACK strings/table size,
 and TLS record/extension counts also have explicit configurable limits with
 hard ceilings. Limit failures and recognized malformed/truncated inputs return
 `CaptureError`; unrecognized application data produces an opaque connection
-flow.
+flow. Public input Debug output reports byte counts only and never renders
+captured bytes.

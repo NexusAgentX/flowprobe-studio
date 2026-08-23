@@ -242,10 +242,20 @@ impl TlsInterception {
 }
 
 /// Borrowed directional bytes for the batch convenience API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DirectionalData<'a> {
     pub client_to_server: &'a [u8],
     pub server_to_client: &'a [u8],
+}
+
+impl fmt::Debug for DirectionalData<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DirectionalData")
+            .field("client_to_server_bytes", &self.client_to_server.len())
+            .field("server_to_client_bytes", &self.server_to_client.len())
+            .finish()
+    }
 }
 
 impl DirectionalData<'_> {
@@ -447,8 +457,6 @@ impl CaptureSession {
             Some(http2::decode(
                 application_client,
                 application_server,
-                &self.context,
-                protocols.len() > 1,
                 &self.limits,
             )?)
         } else if stream_transport && http1::looks_like_request(application_client) {

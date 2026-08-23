@@ -12,14 +12,22 @@ pub(crate) fn looks_like_request(input: &[u8]) -> bool {
         .split(|byte| *byte == b'\r' || *byte == b'\n')
         .next()
         .unwrap_or_default();
-    let Some(method_end) = line.iter().position(|byte| *byte == b' ') else {
+    let mut parts = line.split(|byte| *byte == b' ');
+    let Some(method) = parts.next() else {
         return false;
     };
-    let method = &line[..method_end];
+    let Some(target) = parts.next() else {
+        return false;
+    };
+    let Some(version) = parts.next() else {
+        return false;
+    };
     !method.is_empty()
         && method.len() <= 32
         && method.iter().copied().all(is_http_token_byte)
-        && (line[method_end + 1..].contains(&b' ') || input.len() > line.len() || input.len() < 16)
+        && !target.is_empty()
+        && parts.next().is_none()
+        && matches!(version, b"HTTP/1.0" | b"HTTP/1.1")
 }
 
 pub(crate) fn decode(

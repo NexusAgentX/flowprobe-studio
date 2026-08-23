@@ -11,6 +11,10 @@ use flowprobe_model::{
 
 const HTTP1_REQUEST: &str = include_str!("../../../tests/fixtures/http1/basic-request.http");
 const HTTP1_RESPONSE: &str = include_str!("../../../tests/fixtures/http1/basic-response.http");
+const CHUNKED_HTTP1_REQUEST: &str =
+    include_str!("../../../tests/fixtures/http1/chunked-request.http");
+const CHUNKED_HTTP1_RESPONSE: &str =
+    include_str!("../../../tests/fixtures/http1/chunked-response.http");
 const TRUNCATED_HTTP1_REQUEST: &str =
     include_str!("../../../tests/fixtures/http1/truncated-request.http");
 const HTTP2_CLIENT: &str = include_str!("../../../tests/fixtures/http2/basic-client.hex");
@@ -61,6 +65,36 @@ fn http1_request_response_fixture_emits_expected_normalized_transaction() {
         Some("text/plain; charset=utf-8")
     );
     assert_eq!(response.byte_count, 7);
+}
+
+#[test]
+fn http1_chunked_fixtures_count_payload_without_framing_or_trailers() {
+    let request = escaped_http(CHUNKED_HTTP1_REQUEST);
+    let response = escaped_http(CHUNKED_HTTP1_RESPONSE);
+    let flow = CaptureCore::default()
+        .capture(
+            context("http1_chunked", 80),
+            DirectionalData {
+                client_to_server: &request,
+                server_to_client: &response,
+            },
+            TlsInterception::NotAttempted,
+            None,
+        )
+        .expect("valid chunked fixtures must decode");
+
+    assert_valid_round_trip(&flow);
+    let transaction = http_transaction(&flow);
+    assert_eq!(transaction.request.path, "/chunked");
+    assert_eq!(transaction.request.byte_count, 9);
+    assert_eq!(
+        transaction
+            .response
+            .as_ref()
+            .expect("fixture has a response")
+            .byte_count,
+        3
+    );
 }
 
 #[test]
@@ -330,6 +364,89 @@ fn parser_resource_limits_and_opaque_fallback_are_enforced() {
 }
 
 #[test]
+fn non_http_text_protocols_fall_back_to_opaque_connection_metadata() {
+    for (suffix, client, server) in [
+        (
+            "smtp",
+            b"EHLO mail.example\r\n".as_slice(),
+            b"250 hello\r\n".as_slice(),
+        ),
+        (
+            "redis",
+            b"GET key\r\n".as_slice(),
+            b"$5\r\nvalue\r\n".as_slice(),
+        ),
+    ] {
+        let flow = CaptureCore::default()
+            .capture(
+                context(suffix, 9000),
+                DirectionalData {
+                    client_to_server: client,
+                    server_to_client: server,
+                },
+                TlsInterception::NotAttempted,
+                None,
+            )
+            .expect("non-HTTP text protocols must remain opaque");
+        assert_eq!(flow.protocols.len(), 1);
+        assert!(matches!(
+            flow.protocols[0].metadata,
+            ProtocolMetadata::Connection(_)
+        ));
+    }
+}
+
+#[test]
+fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
+    let missing_scheme = h2_request(1, 0x05, &[0x82, 0x84], None);
+    let valid_headers = [
+        0x82, 0x87, 0x84, 0x01, 0x0c, b'f', b'i', b'x', b't', b'u', b'r', b'e', b'.', b't', b'e',
+        b's', b't',
+    ];
+    let even_stream = h2_request(2, 0x05, &valid_headers, None);
+    let data_after_end = h2_request(1, 0x05, &valid_headers, Some((0x01, b"x")));
+    let incomplete_stream = h2_request(1, 0x04, &valid_headers, None);
+
+    for (suffix, bytes, expected) in [
+        ("h2_missing_scheme", missing_scheme, "malformed"),
+        ("h2_even_stream", even_stream, "malformed"),
+        ("h2_data_after_end", data_after_end, "malformed"),
+        ("h2_incomplete", incomplete_stream, "unsupported"),
+    ] {
+        let result = CaptureCore::default().capture(
+            context(suffix, 443),
+            DirectionalData {
+                client_to_server: &bytes,
+                server_to_client: &[],
+            },
+            TlsInterception::NotAttempted,
+            None,
+        );
+        match expected {
+            "malformed" => assert!(matches!(result, Err(CaptureError::MalformedHttp2(_)))),
+            "unsupported" => assert!(matches!(result, Err(CaptureError::UnsupportedHttp2(_)))),
+            _ => unreachable!("test expectation is fixed"),
+        }
+    }
+}
+
+#[test]
+fn directional_data_debug_reports_only_lengths() {
+    let secret = b"Authorization: Bearer must-not-appear\r\n";
+    let debug = format!(
+        "{:?}",
+        DirectionalData {
+            client_to_server: secret,
+            server_to_client: b"Cookie: also-secret\r\n",
+        }
+    );
+    assert!(!debug.contains("Authorization"));
+    assert!(!debug.contains("must-not-appear"));
+    assert!(!debug.contains("also-secret"));
+    assert!(debug.contains(&secret.len().to_string()));
+}
+
+#[test]
 fn deterministic_arbitrary_inputs_never_panic() {
     for length in 0..=512usize {
         let mut state = u64::try_from(length).expect("fixture length fits") + 1;
@@ -413,6 +530,35 @@ fn decode_hex(fixture: &str) -> Vec<u8> {
             u8::from_str_radix(text, 16).expect("fixture contains valid hex")
         })
         .collect()
+}
+
+fn h2_request(
+    stream_id: u32,
+    header_flags: u8,
+    header_block: &[u8],
+    trailing_data: Option<(u8, &[u8])>,
+) -> Vec<u8> {
+    let mut bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+    bytes.extend(h2_frame(4, 0, 0, &[]));
+    bytes.extend(h2_frame(1, header_flags, stream_id, header_block));
+    if let Some((flags, payload)) = trailing_data {
+        bytes.extend(h2_frame(0, flags, stream_id, payload));
+    }
+    bytes
+}
+
+fn h2_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(payload.len()).expect("test frame payload length fits u32");
+    assert!(length <= 0x00ff_ffff, "test frame payload fits u24");
+    let length_bytes = length.to_be_bytes();
+    let stream_bytes = stream_id.to_be_bytes();
+    let mut frame = Vec::with_capacity(9 + payload.len());
+    frame.extend_from_slice(&length_bytes[1..]);
+    frame.push(frame_type);
+    frame.push(flags);
+    frame.extend_from_slice(&stream_bytes);
+    frame.extend_from_slice(payload);
+    frame
 }
 
 fn http_transaction(flow: &NormalizedFlowV0) -> &flowprobe_model::HttpTransactionMetadata {
