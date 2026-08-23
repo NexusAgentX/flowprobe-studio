@@ -14,19 +14,20 @@ second Rust target. Regenerate it with the pinned mise Rust toolchain:
 
 ```sh
 mise exec -- rustup target add wasm32-unknown-unknown
-mise exec -- cargo build -p flowprobe-demo-analyzer --target wasm32-unknown-unknown --release
-mise exec -- cargo run -p flowprobe-analyzer-runtime --example componentize -- \
-  target/wasm32-unknown-unknown/release/flowprobe_demo_analyzer.wasm \
-  plugins/demo/artifacts/flowprobe_demo_analyzer.wasm
+mise exec -- python tests/contract/analyzer/verify_artifacts.py --write
 ```
+
+This is the only supported artifact-writing path. It performs locked offline
+builds in isolated temporary targets, remaps local source/toolchain paths, and
+rejects local absolute paths in the resulting component.
 
 `wit-bindgen` generates canonical-ABI export shims containing unsafe code, so
 this guest package narrowly allows generated unsafe code. The analyzer
 implementation has no handwritten unsafe block. `wit-bindgen` is
 `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT`.
 
-Verify the demo and adversarial checked-in artifacts are byte-for-byte outputs
-of their current source with:
+Verify without writing that the demo and adversarial checked-in artifacts are
+byte-for-byte outputs of their current source with:
 
 ```sh
 mise exec -- python tests/contract/analyzer/verify_artifacts.py

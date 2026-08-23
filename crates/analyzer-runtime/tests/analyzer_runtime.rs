@@ -142,6 +142,19 @@ fn demo_permissions() -> AnalyzerPermissions {
     AnalyzerPermissions::new(true, true, false)
 }
 
+fn replace_once(source: &str, needle: &str, replacement: &str) -> String {
+    assert_eq!(
+        source.match_indices(needle).count(),
+        1,
+        "fixture mutation anchor must remain unique"
+    );
+    source.replacen(needle, replacement, 1)
+}
+
+fn printed_demo_component() -> String {
+    wasmprinter::print_bytes(DEMO_COMPONENT).expect("checked-in demo component must print")
+}
+
 #[test]
 fn demo_component_emits_the_same_semantic_event_for_the_golden_fixture() {
     let runtime = AnalyzerRuntime::new(AnalyzerLimits::default()).expect("runtime configuration");
@@ -182,6 +195,12 @@ fn demo_component_emits_the_same_semantic_event_for_the_golden_fixture() {
 fn only_the_exact_versioned_analyzer_interfaces_can_be_imported() {
     let runtime = AnalyzerRuntime::new(AnalyzerLimits::default()).expect("runtime configuration");
 
+    let valid_wat = printed_demo_component();
+    let round_tripped_demo = wat::parse_str(&valid_wat).expect("printed demo component must parse");
+    runtime
+        .compile(&round_tripped_demo, demo_permissions())
+        .expect("round-tripped positive control has the complete Analyzer v0.1 ABI");
+
     for import in [
         "wasi:filesystem/types@0.2.0",
         "wasi:sockets/tcp@0.2.0",
@@ -206,38 +225,55 @@ fn only_the_exact_versioned_analyzer_interfaces_can_be_imported() {
         AnalyzerError::UnsupportedContractVersion
     );
 
-    let wrong_exact_import_shape = wat::parse_str(
-        r#"(component
-            (type $wrong-get (func (param "event" string) (result string)))
-            (type $wrong-host (instance
-                (export "get-event-json" (func (type $wrong-get)))
-            ))
-            (import "flowprobe:analyzer/host@0.1.0"
-                (instance (type $wrong-host)))
-        )"#,
+    let host_import_anchor = r#"      (export (;1;) "emit-semantic" (func (type 7)))
     )
-    .expect("valid exact-name wrong-import-shape component");
+  )
+  (import "flowprobe:analyzer/host@0.1.0""#;
+    let wrong_host_import = r#"      (export (;1;) "emit-semantic" (func (type 7)))
+      (type (;8;) (func (param "level" string)))
+      (export (;2;) "log" (func (type 8)))
+    )
+  )
+  (import "flowprobe:analyzer/host@0.1.0""#;
+    let wrong_exact_import_shape = wat::parse_str(replace_once(
+        &valid_wat,
+        host_import_anchor,
+        wrong_host_import,
+    ))
+    .expect("single-defect wrong-import-shape component must remain structurally valid");
     assert_eq!(
         runtime
             .compile(&wrong_exact_import_shape, AnalyzerPermissions::NONE)
-            .expect_err("an exact import name cannot bypass its function shape"),
+            .expect_err("an exact host import name cannot bypass the log function shape"),
         AnalyzerError::ContractMismatch
     );
 
-    let wrong_export_signature = wat::parse_str(
-        r#"(component
-            (core module $module
-                (func (export "wrong-info"))
-            )
-            (core instance $instance (instantiate $module))
-            (alias core export $instance "wrong-info" (core func $wrong-core-info))
-            (type $wrong-info-type (func))
-            (func $wrong-info (type $wrong-info-type)
-                (canon lift (core func $wrong-core-info)))
-            (export "info" (func $wrong-info))
-        )"#,
-    )
-    .expect("valid wrong-export-signature component");
+    let without_info_export = replace_once(
+        &valid_wat,
+        r##"  (export $"#func3 info" (@name "info") (;3;) "info" (func $info))
+"##,
+        "",
+    );
+    let wrong_info_export = r#"  (core module $wrong-info-module
+    (func (export "wrong-info"))
+  )
+  (core instance $wrong-info-instance (instantiate $wrong-info-module))
+  (alias core export $wrong-info-instance "wrong-info" (core func $wrong-core-info))
+  (type $wrong-info-type (func))
+  (func $wrong-info (type $wrong-info-type)
+    (canon lift (core func $wrong-core-info)))
+  (export "info" (func $wrong-info))
+"#;
+    let top_level_producers = r#"  (@producers
+    (processed-by "wit-component" "0.254.0")
+  )
+)"#;
+    let wrong_export_signature = wat::parse_str(replace_once(
+        &without_info_export,
+        top_level_producers,
+        &format!("{wrong_info_export}{top_level_producers}"),
+    ))
+    .expect("single-defect wrong-info-signature component must remain structurally valid");
     assert_eq!(
         runtime
             .compile(&wrong_export_signature, AnalyzerPermissions::NONE)
