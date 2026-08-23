@@ -45,7 +45,9 @@ pub(crate) fn decode(
     let response = response_side
         .headers
         .as_ref()
-        .map(|headers| response_metadata(&headers.fields, response_side.body_bytes))
+        .map(|headers| {
+            response_metadata(&headers.fields, response_side.body_bytes, &request.method)
+        })
         .transpose()?;
 
     Ok(HttpTransactionMetadata {
@@ -122,6 +124,11 @@ fn decode_direction(
         }
         let stream_id = raw_stream_id;
         let payload = &remaining[9..frame_length];
+        if frame_count == 1 && (frame_type != 4 || flags & FLAG_ACK != 0) {
+            return Err(CaptureError::MalformedHttp2(
+                "connection preface is not followed by initial SETTINGS",
+            ));
+        }
         match frame_type {
             0 => {
                 if stream_ended {
@@ -505,6 +512,11 @@ fn request_metadata(
     byte_count: u64,
 ) -> Result<HttpRequestMetadata, CaptureError> {
     let method = required_unique_text(fields, b":method", HttpSide::Request, "method")?;
+    if method.eq_ignore_ascii_case("CONNECT") {
+        return Err(CaptureError::UnsupportedHttp2(
+            "CONNECT request in the minimum v0 path",
+        ));
+    }
     let path = required_unique_text(fields, b":path", HttpSide::Request, "path")?;
     let scheme = required_unique_text(fields, b":scheme", HttpSide::Request, "scheme")?;
     let authority = optional_unique_text(fields, b":authority", HttpSide::Request, "authority")?
@@ -517,6 +529,7 @@ fn request_metadata(
         .ok_or(CaptureError::MalformedHttp2("request authority is missing"))?;
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Request, "content-type")?;
+    validate_content_length(fields, byte_count, HttpSide::Request)?;
     Ok(HttpRequestMetadata {
         method,
         scheme,
@@ -533,11 +546,25 @@ fn request_metadata(
 fn response_metadata(
     fields: &[HeaderField],
     byte_count: u64,
+    request_method: &str,
 ) -> Result<HttpResponseMetadata, CaptureError> {
     let status = required_unique_text(fields, b":status", HttpSide::Response, "status")?;
     let status = status
         .parse::<u16>()
         .map_err(|_| CaptureError::MalformedHttp2("invalid response status"))?;
+    if (100..=199).contains(&status) {
+        return Err(CaptureError::UnsupportedHttp2(
+            "informational response in the minimum v0 path",
+        ));
+    }
+    if byte_count != 0
+        && (request_method.eq_ignore_ascii_case("HEAD") || matches!(status, 204 | 304))
+    {
+        return Err(CaptureError::MalformedHttp2(
+            "response semantics forbid a message body",
+        ));
+    }
+    validate_content_length(fields, byte_count, HttpSide::Response)?;
     let content_type =
         optional_unique_text(fields, b"content-type", HttpSide::Response, "content-type")?;
     Ok(HttpResponseMetadata {
@@ -548,6 +575,26 @@ fn response_metadata(
         body_ref: None,
         extensions: BTreeMap::new(),
     })
+}
+
+fn validate_content_length(
+    fields: &[HeaderField],
+    byte_count: u64,
+    side: HttpSide,
+) -> Result<(), CaptureError> {
+    let Some(value) = optional_unique_text(fields, b"content-length", side, "content-length")?
+    else {
+        return Ok(());
+    };
+    let declared = value
+        .parse::<u64>()
+        .map_err(|_| CaptureError::MalformedHttp2("invalid content-length"))?;
+    if declared != byte_count {
+        return Err(CaptureError::MalformedHttp2(
+            "content-length does not match DATA payload bytes",
+        ));
+    }
+    Ok(())
 }
 
 fn required_unique_text(

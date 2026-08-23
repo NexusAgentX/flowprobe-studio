@@ -406,12 +406,28 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
     let even_stream = h2_request(2, 0x05, &valid_headers, None);
     let data_after_end = h2_request(1, 0x05, &valid_headers, Some((0x01, b"x")));
     let incomplete_stream = h2_request(1, 0x04, &valid_headers, None);
+    let missing_client_settings = h2_request_without_settings(1, 0x05, &valid_headers);
+    let connect_request = h2_request(1, 0x05, b"\x02\x07CONNECT\x01\x0cfixture.test", None);
+    let mut mismatched_length_headers = valid_headers.to_vec();
+    mismatched_length_headers.extend_from_slice(b"\x00\x0econtent-length\x012");
+    let mismatched_length = h2_request(1, 0x04, &mismatched_length_headers, Some((0x01, b"x")));
 
     for (suffix, bytes, expected) in [
         ("h2_missing_scheme", missing_scheme, "malformed"),
         ("h2_even_stream", even_stream, "malformed"),
         ("h2_data_after_end", data_after_end, "malformed"),
         ("h2_incomplete", incomplete_stream, "unsupported"),
+        (
+            "h2_missing_client_settings",
+            missing_client_settings,
+            "malformed",
+        ),
+        (
+            "h2_mismatched_content_length",
+            mismatched_length,
+            "malformed",
+        ),
+        ("h2_connect", connect_request, "unsupported"),
     ] {
         let result = CaptureCore::default().capture(
             context(suffix, 443),
@@ -428,6 +444,55 @@ fn http2_minimum_stream_state_and_pseudo_headers_are_enforced() {
             _ => unreachable!("test expectation is fixed"),
         }
     }
+
+    let valid_client = h2_request(1, 0x05, &valid_headers, None);
+    let missing_server_settings = h2_frame(1, 0x05, 1, &[0x88]);
+    let missing_server_result = CaptureCore::default().capture(
+        context("h2_missing_server_settings", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &missing_server_settings,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        missing_server_result,
+        Err(CaptureError::MalformedHttp2(_))
+    ));
+
+    let mut forbidden_body_response = h2_frame(4, 0, 0, &[]);
+    forbidden_body_response.extend(h2_frame(1, 0x04, 1, &[0x89]));
+    forbidden_body_response.extend(h2_frame(0, 0x01, 1, b"x"));
+    let forbidden_body_result = CaptureCore::default().capture(
+        context("h2_204_body", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &forbidden_body_response,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        forbidden_body_result,
+        Err(CaptureError::MalformedHttp2(_))
+    ));
+
+    let mut informational_response = h2_frame(4, 0, 0, &[]);
+    informational_response.extend(h2_frame(1, 0x05, 1, b"\x08\x03100"));
+    let informational_result = CaptureCore::default().capture(
+        context("h2_informational", 443),
+        DirectionalData {
+            client_to_server: &valid_client,
+            server_to_client: &informational_response,
+        },
+        TlsInterception::NotAttempted,
+        None,
+    );
+    assert!(matches!(
+        informational_result,
+        Err(CaptureError::UnsupportedHttp2(_))
+    ));
 }
 
 #[test]
@@ -544,6 +609,12 @@ fn h2_request(
     if let Some((flags, payload)) = trailing_data {
         bytes.extend(h2_frame(0, flags, stream_id, payload));
     }
+    bytes
+}
+
+fn h2_request_without_settings(stream_id: u32, header_flags: u8, header_block: &[u8]) -> Vec<u8> {
+    let mut bytes = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+    bytes.extend(h2_frame(1, header_flags, stream_id, header_block));
     bytes
 }
 
