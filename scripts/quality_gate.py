@@ -1197,16 +1197,6 @@ def _lex_javascript(
     return tokens, comments
 
 
-def _is_javascript_test(path: PurePosixPath) -> bool:
-    lowered_parts = {part.lower() for part in path.parts[:-1]}
-    name = path.name.lower()
-    return (
-        bool(lowered_parts & {"test", "tests", "__tests__"})
-        or re.search(r"(?:^|[._-])(?:test|spec)\.", name) is not None
-        or name.startswith(("test_", "spec_"))
-    )
-
-
 def _javascript_root_cursor(tokens: list[Token], index: int) -> int:
     opening = index - 1
     wrappers = 0
@@ -1294,8 +1284,6 @@ def _scan_javascript(path: PurePosixPath, text: str, positions: PositionIndex) -
         if _javascript_handler_is_empty(tokens[cursor + 1 : body_end]):
             findings.append(_finding(path, item, "javascript-empty-handler"))
 
-    if not _is_javascript_test(path):
-        return findings
     test_roots = {"context", "describe", "it", "specify", "suite", "test"}
     aliases = {
         "fcontext",
