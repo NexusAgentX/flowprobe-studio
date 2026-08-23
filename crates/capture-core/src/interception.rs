@@ -6,7 +6,7 @@ use std::{
     net::TcpStream,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use flowprobe_model::NormalizedFlowV0;
@@ -36,8 +36,12 @@ const CLOCK_SKEW: TimeDuration = TimeDuration::minutes(5);
 /// Resource and progress ceilings for one intercepted TLS transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterceptionLimits {
+    /// Maximum idle duration of an individual socket read or write.
     pub io_timeout: Duration,
+    /// Maximum number of explicit TLS read or write steps for either handshake.
     pub max_handshake_iterations: usize,
+    /// Monotonic wall-clock limit shared by both TLS legs and the HTTP relay.
+    pub max_transaction_duration: Duration,
 }
 
 impl Default for InterceptionLimits {
@@ -45,6 +49,7 @@ impl Default for InterceptionLimits {
         Self {
             io_timeout: Duration::from_secs(5),
             max_handshake_iterations: 1024,
+            max_transaction_duration: Duration::from_secs(30),
         }
     }
 }
@@ -90,6 +95,7 @@ pub enum InterceptionError {
     },
     UnexpectedEof(InterceptionFailureStage),
     NoProgress(InterceptionFailureStage),
+    TransactionDeadlineExceeded(InterceptionFailureStage),
     TranscriptLimit {
         direction: Direction,
         limit: usize,
@@ -123,6 +129,12 @@ impl fmt::Display for InterceptionError {
             Self::Io { stage, kind } => write!(formatter, "I/O failure during {stage}: {kind}"),
             Self::UnexpectedEof(stage) => write!(formatter, "unexpected EOF during {stage}"),
             Self::NoProgress(stage) => write!(formatter, "no progress during {stage}"),
+            Self::TransactionDeadlineExceeded(stage) => {
+                write!(
+                    formatter,
+                    "TLS interception transaction deadline exceeded during {stage}"
+                )
+            }
             Self::TranscriptLimit { direction, limit } => write!(
                 formatter,
                 "TLS transcript for {direction} exceeds the {limit}-byte capture limit"
@@ -408,6 +420,11 @@ impl TlsInterceptor {
                 "handshake iteration limit must be greater than zero",
             ));
         }
+        if limits.max_transaction_duration.is_zero() {
+            return Err(InterceptionError::InvalidConfiguration(
+                "transaction duration must be greater than zero",
+            ));
+        }
         Ok(Self {
             core,
             authority,
@@ -425,30 +442,32 @@ impl TlsInterceptor {
     pub fn intercept(
         &self,
         context: CaptureContext,
-        mut downstream: TcpStream,
+        downstream: TcpStream,
         upstream: TcpStream,
         target: &InterceptionTarget,
     ) -> Result<InterceptionResult, InterceptionError> {
-        configure_socket(
-            &downstream,
-            self.limits.io_timeout,
-            InterceptionFailureStage::DownstreamHandshake,
-        )?;
-        configure_socket(
-            &upstream,
-            self.limits.io_timeout,
-            InterceptionFailureStage::UpstreamHandshake,
-        )?;
+        let deadline = Instant::now()
+            .checked_add(self.limits.max_transaction_duration)
+            .ok_or(InterceptionError::InvalidConfiguration(
+                "transaction duration is too large",
+            ))?;
+        let downstream = DeadlineStream::new(downstream, self.limits.io_timeout, deadline);
+        let mut upstream = DeadlineStream::new(upstream, self.limits.io_timeout, deadline);
 
         let per_direction_limit = self.core.limits().max_pending_bytes_per_direction;
         let client_budget = ByteBudget::new(Direction::ClientToServer, per_direction_limit);
         let server_budget = ByteBudget::new(Direction::ServerToClient, per_direction_limit);
         let mut wire_client = Vec::new();
         let mut wire_server = Vec::new();
-        let accepted = accept_client_hello(
-            &mut downstream,
+        let mut downstream_transport = RecordingStream::new(
+            downstream,
             &mut wire_client,
-            &client_budget,
+            &mut wire_server,
+            client_budget.clone(),
+            server_budget.clone(),
+        );
+        let accepted = accept_client_hello(
+            &mut downstream_transport,
             self.limits.max_handshake_iterations,
         )?;
         let client_hello = accepted.client_hello();
@@ -469,18 +488,15 @@ impl TlsInterceptor {
             .with_single_cert(vec![leaf_certificate.clone()], leaf_key)
             .map_err(|_| InterceptionError::CertificateGeneration)?;
         server_config.alpn_protocols = vec![HTTP_1_1.to_vec()];
-        let downstream_connection = accepted
+        let mut downstream_connection = accepted
             .into_connection(Arc::new(server_config))
             .map_err(|_| InterceptionError::DownstreamTls)?;
-        let downstream_transport = RecordingStream::new(
-            downstream,
-            &mut wire_client,
-            &mut wire_server,
-            client_budget.clone(),
-            server_budget.clone(),
-        );
+        complete_server_handshake(
+            &mut downstream_connection,
+            &mut downstream_transport,
+            self.limits.max_handshake_iterations,
+        )?;
         let mut downstream_tls = StreamOwned::new(downstream_connection, downstream_transport);
-        complete_server_handshake(&mut downstream_tls, self.limits.max_handshake_iterations)?;
         require_http_1_1(downstream_tls.conn.alpn_protocol())?;
 
         let mut client_config = ClientConfig::builder_with_provider(self.provider.clone())
@@ -489,11 +505,15 @@ impl TlsInterceptor {
             .with_root_certificates(target.upstream_roots.clone())
             .with_no_client_auth();
         client_config.alpn_protocols = vec![HTTP_1_1.to_vec()];
-        let upstream_connection =
+        let mut upstream_connection =
             ClientConnection::new(Arc::new(client_config), target.upstream_server_name.clone())
                 .map_err(|_| InterceptionError::UpstreamTls)?;
+        complete_client_handshake(
+            &mut upstream_connection,
+            &mut upstream,
+            self.limits.max_handshake_iterations,
+        )?;
         let mut upstream_tls = StreamOwned::new(upstream_connection, upstream);
-        complete_client_handshake(&mut upstream_tls, self.limits.max_handshake_iterations)?;
         require_http_1_1(upstream_tls.conn.alpn_protocol())?;
 
         let request = read_http_message(
@@ -553,6 +573,7 @@ impl TlsInterceptor {
             interception.clone(),
             Some(transcript.decrypted()),
         )?;
+        ensure_transaction_deadline(deadline, InterceptionFailureStage::DownstreamResponse)?;
         Ok(InterceptionResult {
             flow,
             transcript,
@@ -562,18 +583,104 @@ impl TlsInterceptor {
     }
 }
 
-fn configure_socket(
-    stream: &TcpStream,
-    timeout: Duration,
+struct DeadlineStream {
+    stream: TcpStream,
+    idle_timeout: Duration,
+    deadline: Instant,
+}
+
+impl DeadlineStream {
+    fn new(stream: TcpStream, idle_timeout: Duration, deadline: Instant) -> Self {
+        Self {
+            stream,
+            idle_timeout,
+            deadline,
+        }
+    }
+
+    fn operation_timeout(&self) -> io::Result<(Duration, bool)> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(transaction_deadline_error)?;
+        Ok((
+            self.idle_timeout.min(remaining),
+            remaining <= self.idle_timeout,
+        ))
+    }
+
+    fn map_deadline<T>(&self, result: io::Result<T>, deadline_limited: bool) -> io::Result<T> {
+        if Instant::now() >= self.deadline {
+            return Err(transaction_deadline_error());
+        }
+        match result {
+            Err(error)
+                if deadline_limited
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+            {
+                Err(transaction_deadline_error())
+            }
+            result => result,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TransactionDeadlineExpired;
+
+impl fmt::Display for TransactionDeadlineExpired {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TLS interception transaction deadline expired")
+    }
+}
+
+impl Error for TransactionDeadlineExpired {}
+
+fn transaction_deadline_error() -> io::Error {
+    io::Error::other(TransactionDeadlineExpired)
+}
+
+fn ensure_transaction_deadline(
+    deadline: Instant,
     stage: InterceptionFailureStage,
 ) -> Result<(), InterceptionError> {
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|error| io_failure(stage, error))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|error| io_failure(stage, error))?;
-    Ok(())
+    if Instant::now() >= deadline {
+        Err(InterceptionError::TransactionDeadlineExceeded(stage))
+    } else {
+        Ok(())
+    }
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let (timeout, deadline_limited) = self.operation_timeout()?;
+        let configured = self.stream.set_read_timeout(Some(timeout));
+        self.map_deadline(configured, deadline_limited)?;
+        let result = self.stream.read(buffer);
+        self.map_deadline(result, deadline_limited)
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let (timeout, deadline_limited) = self.operation_timeout()?;
+        let configured = self.stream.set_write_timeout(Some(timeout));
+        self.map_deadline(configured, deadline_limited)?;
+        let result = self.stream.write(buffer);
+        self.map_deadline(result, deadline_limited)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let (timeout, deadline_limited) = self.operation_timeout()?;
+        let configured = self.stream.set_write_timeout(Some(timeout));
+        self.map_deadline(configured, deadline_limited)?;
+        let result = self.stream.flush();
+        self.map_deadline(result, deadline_limited)
+    }
 }
 
 #[derive(Clone)]
@@ -625,8 +732,8 @@ impl ByteBudget {
     }
 }
 
-struct RecordingStream<'a> {
-    stream: TcpStream,
+struct RecordingStream<'a, T> {
+    stream: T,
     read_bytes: &'a mut Vec<u8>,
     written_bytes: &'a mut Vec<u8>,
     read_budget: ByteBudget,
@@ -647,9 +754,9 @@ impl fmt::Display for AllocationFailure {
 
 impl Error for AllocationFailure {}
 
-impl<'a> RecordingStream<'a> {
+impl<'a, T> RecordingStream<'a, T> {
     fn new(
-        stream: TcpStream,
+        stream: T,
         read_bytes: &'a mut Vec<u8>,
         written_bytes: &'a mut Vec<u8>,
         read_budget: ByteBudget,
@@ -665,7 +772,7 @@ impl<'a> RecordingStream<'a> {
     }
 }
 
-impl Read for RecordingStream<'_> {
+impl<T: Read> Read for RecordingStream<'_, T> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let remaining = self.read_budget.remaining();
         if remaining == 0 {
@@ -685,7 +792,7 @@ impl Read for RecordingStream<'_> {
     }
 }
 
-impl Write for RecordingStream<'_> {
+impl<T: Write> Write for RecordingStream<'_, T> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let remaining = self.write_budget.remaining();
         if remaining == 0 {
@@ -710,130 +817,188 @@ impl Write for RecordingStream<'_> {
 }
 
 fn accept_client_hello(
-    stream: &mut TcpStream,
-    wire_client: &mut Vec<u8>,
-    budget: &ByteBudget,
+    stream: &mut (impl Read + Write),
     max_iterations: usize,
 ) -> Result<rustls::server::Accepted, InterceptionError> {
+    let stage = InterceptionFailureStage::DownstreamClientHello;
     let mut acceptor = Acceptor::default();
-    for _ in 0..max_iterations {
-        let before = wire_client.len();
-        let remaining = budget.remaining();
-        if remaining == 0 {
-            return budget.reserve(1).and_then(|()| {
-                Err(InterceptionError::NoProgress(
-                    InterceptionFailureStage::DownstreamClientHello,
-                ))
-            });
+    let mut operations = 0;
+    while operations < max_iterations {
+        operations += 1;
+        let consumed = acceptor
+            .read_tls(stream)
+            .map_err(|error| io_failure(stage, error))?;
+        if consumed == 0 {
+            return Err(InterceptionError::UnexpectedEof(stage));
         }
-        let mut buffer = [0_u8; 16 * 1024];
-        let allowed = remaining.min(buffer.len());
-        let count = stream
-            .read(&mut buffer[..allowed])
-            .map_err(|error| io_failure(InterceptionFailureStage::DownstreamClientHello, error))?;
-        if count == 0 {
-            return Err(InterceptionError::UnexpectedEof(
-                InterceptionFailureStage::DownstreamClientHello,
-            ));
-        }
-        budget.reserve(count)?;
-        wire_client.try_reserve(count).map_err(|_| {
-            InterceptionError::Capture(CaptureError::AllocationFailed {
-                direction: Direction::ClientToServer,
-                layer: InputLayer::Wire,
-            })
-        })?;
-        wire_client.extend_from_slice(&buffer[..count]);
-        let mut cursor = io::Cursor::new(&buffer[..count]);
-        acceptor
-            .read_tls(&mut cursor)
-            .map_err(|error| io_failure(InterceptionFailureStage::DownstreamClientHello, error))?;
         match acceptor.accept() {
             Ok(Some(accepted)) => return Ok(accepted),
             Ok(None) => {}
             Err((_, mut alert)) => {
-                let _ = alert.write_all(stream);
+                while operations < max_iterations {
+                    operations += 1;
+                    let count = match alert.write(stream) {
+                        Ok(count) => count,
+                        Err(error) => return Err(client_hello_alert_failure(stage, error)),
+                    };
+                    if count == 0 {
+                        return Err(InterceptionError::DownstreamTls);
+                    }
+                }
                 return Err(InterceptionError::DownstreamTls);
             }
         }
-        if wire_client.len() == before {
-            return Err(InterceptionError::NoProgress(
-                InterceptionFailureStage::DownstreamClientHello,
-            ));
-        }
     }
-    Err(InterceptionError::NoProgress(
-        InterceptionFailureStage::DownstreamClientHello,
-    ))
+    Err(InterceptionError::NoProgress(stage))
 }
 
 fn complete_server_handshake(
-    stream: &mut StreamOwned<ServerConnection, RecordingStream<'_>>,
+    connection: &mut ServerConnection,
+    stream: &mut (impl Read + Write),
     max_iterations: usize,
 ) -> Result<(), InterceptionError> {
+    connection
+        .process_new_packets()
+        .map_err(|_| InterceptionError::DownstreamTls)?;
     complete_handshake(
+        connection,
         stream,
         max_iterations,
         InterceptionFailureStage::DownstreamHandshake,
-        InterceptionError::DownstreamTls,
     )
 }
 
 fn complete_client_handshake(
-    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    connection: &mut ClientConnection,
+    stream: &mut (impl Read + Write),
     max_iterations: usize,
 ) -> Result<(), InterceptionError> {
     complete_handshake(
+        connection,
         stream,
         max_iterations,
         InterceptionFailureStage::UpstreamHandshake,
-        InterceptionError::UpstreamTls,
     )
 }
 
-trait CompleteIo {
-    fn is_handshaking(&self) -> bool;
-    fn complete_io_once(&mut self) -> io::Result<(usize, usize)>;
+trait HandshakeConnection {
+    fn handshake_in_progress(&self) -> bool;
+    fn needs_read(&self) -> bool;
+    fn needs_write(&self) -> bool;
+    fn read_tls_once(&mut self, reader: &mut dyn Read) -> io::Result<usize>;
+    fn write_tls_once(&mut self, writer: &mut dyn Write) -> io::Result<usize>;
+    fn process_new_packets_once(&mut self) -> Result<(), rustls::Error>;
 }
 
-impl<T: Read + Write> CompleteIo for StreamOwned<ServerConnection, T> {
-    fn is_handshaking(&self) -> bool {
-        self.conn.is_handshaking()
+impl HandshakeConnection for ServerConnection {
+    fn handshake_in_progress(&self) -> bool {
+        self.is_handshaking()
     }
 
-    fn complete_io_once(&mut self) -> io::Result<(usize, usize)> {
-        self.conn.complete_io(&mut self.sock)
+    fn needs_read(&self) -> bool {
+        self.wants_read()
+    }
+
+    fn needs_write(&self) -> bool {
+        self.wants_write()
+    }
+
+    fn read_tls_once(&mut self, reader: &mut dyn Read) -> io::Result<usize> {
+        self.read_tls(reader)
+    }
+
+    fn write_tls_once(&mut self, writer: &mut dyn Write) -> io::Result<usize> {
+        self.write_tls(writer)
+    }
+
+    fn process_new_packets_once(&mut self) -> Result<(), rustls::Error> {
+        self.process_new_packets().map(|_| ())
     }
 }
 
-impl<T: Read + Write> CompleteIo for StreamOwned<ClientConnection, T> {
-    fn is_handshaking(&self) -> bool {
-        self.conn.is_handshaking()
+impl HandshakeConnection for ClientConnection {
+    fn handshake_in_progress(&self) -> bool {
+        self.is_handshaking()
     }
 
-    fn complete_io_once(&mut self) -> io::Result<(usize, usize)> {
-        self.conn.complete_io(&mut self.sock)
+    fn needs_read(&self) -> bool {
+        self.wants_read()
+    }
+
+    fn needs_write(&self) -> bool {
+        self.wants_write()
+    }
+
+    fn read_tls_once(&mut self, reader: &mut dyn Read) -> io::Result<usize> {
+        self.read_tls(reader)
+    }
+
+    fn write_tls_once(&mut self, writer: &mut dyn Write) -> io::Result<usize> {
+        self.write_tls(writer)
+    }
+
+    fn process_new_packets_once(&mut self) -> Result<(), rustls::Error> {
+        self.process_new_packets().map(|_| ())
     }
 }
 
 fn complete_handshake(
-    stream: &mut impl CompleteIo,
+    connection: &mut impl HandshakeConnection,
+    stream: &mut (impl Read + Write),
     max_iterations: usize,
     stage: InterceptionFailureStage,
-    tls_error: InterceptionError,
 ) -> Result<(), InterceptionError> {
     for _ in 0..max_iterations {
-        if !stream.is_handshaking() {
+        if connection.needs_write() {
+            let count = connection
+                .write_tls_once(stream)
+                .map_err(|error| io_failure(stage, error))?;
+            if count == 0 {
+                return Err(InterceptionError::NoProgress(stage));
+            }
+            continue;
+        }
+        if !connection.handshake_in_progress() {
             return Ok(());
         }
-        match stream.complete_io_once() {
-            Ok((0, 0)) => return Err(InterceptionError::NoProgress(stage)),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::InvalidData => return Err(tls_error),
-            Err(error) => return Err(io_failure(stage, error)),
+        if !connection.needs_read() {
+            return Err(InterceptionError::NoProgress(stage));
         }
+        let count = connection
+            .read_tls_once(stream)
+            .map_err(|error| io_failure(stage, error))?;
+        if count == 0 {
+            return Err(InterceptionError::UnexpectedEof(stage));
+        }
+        connection
+            .process_new_packets_once()
+            .map_err(|_| tls_failure(stage))?;
     }
-    Err(InterceptionError::NoProgress(stage))
+    if !connection.needs_write() && !connection.handshake_in_progress() {
+        Ok(())
+    } else {
+        Err(InterceptionError::NoProgress(stage))
+    }
+}
+
+fn tls_failure(stage: InterceptionFailureStage) -> InterceptionError {
+    match stage {
+        InterceptionFailureStage::DownstreamHandshake => InterceptionError::DownstreamTls,
+        InterceptionFailureStage::UpstreamHandshake => InterceptionError::UpstreamTls,
+        _ => InterceptionError::NoProgress(stage),
+    }
+}
+
+fn client_hello_alert_failure(
+    stage: InterceptionFailureStage,
+    error: io::Error,
+) -> InterceptionError {
+    match io_failure(stage, error) {
+        failure @ (InterceptionError::TransactionDeadlineExceeded(_)
+        | InterceptionError::TranscriptLimit { .. }
+        | InterceptionError::Capture(CaptureError::AllocationFailed { .. })) => failure,
+        _ => InterceptionError::DownstreamTls,
+    }
 }
 
 fn require_http_1_1(alpn: Option<&[u8]>) -> Result<(), InterceptionError> {
@@ -1065,6 +1230,13 @@ fn write_all(
 }
 
 fn io_failure(stage: InterceptionFailureStage, error: io::Error) -> InterceptionError {
+    if error
+        .get_ref()
+        .and_then(|source| source.downcast_ref::<TransactionDeadlineExpired>())
+        .is_some()
+    {
+        return InterceptionError::TransactionDeadlineExceeded(stage);
+    }
     if let Some(limit) = error
         .get_ref()
         .and_then(|source| source.downcast_ref::<InterceptionError>())
@@ -1093,6 +1265,197 @@ fn io_failure(stage: InterceptionFailureStage, error: io::Error) -> Interception
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ScriptedIo {
+        input: io::Cursor<Vec<u8>>,
+        read_calls: usize,
+        output: Vec<u8>,
+        write_failure: Option<io::ErrorKind>,
+    }
+
+    struct PendingWritesHandshake {
+        remaining_writes: usize,
+    }
+
+    impl HandshakeConnection for PendingWritesHandshake {
+        fn handshake_in_progress(&self) -> bool {
+            false
+        }
+
+        fn needs_read(&self) -> bool {
+            false
+        }
+
+        fn needs_write(&self) -> bool {
+            self.remaining_writes > 0
+        }
+
+        fn read_tls_once(&mut self, _reader: &mut dyn Read) -> io::Result<usize> {
+            Ok(0)
+        }
+
+        fn write_tls_once(&mut self, writer: &mut dyn Write) -> io::Result<usize> {
+            if self.remaining_writes == 0 {
+                return Ok(0);
+            }
+            self.remaining_writes -= 1;
+            writer.write(&[0])
+        }
+
+        fn process_new_packets_once(&mut self) -> Result<(), rustls::Error> {
+            Ok(())
+        }
+    }
+
+    impl ScriptedIo {
+        fn new(input: Vec<u8>) -> Self {
+            Self {
+                input: io::Cursor::new(input),
+                read_calls: 0,
+                output: Vec::new(),
+                write_failure: None,
+            }
+        }
+
+        fn failing_writes(input: Vec<u8>, kind: io::ErrorKind) -> Self {
+            Self {
+                write_failure: Some(kind),
+                ..Self::new(input)
+            }
+        }
+    }
+
+    impl Read for ScriptedIo {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.read_calls += 1;
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for ScriptedIo {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if let Some(kind) = self.write_failure {
+                return Err(kind.into());
+            }
+            self.output.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn acceptor_consumes_a_client_hello_larger_than_its_initial_buffer() {
+        let client_hello = client_hello_with_alpn(large_alpn_protocols());
+        assert!(client_hello.len() > 4096);
+        let input_len = client_hello.len();
+        let mut recorded = Vec::new();
+        let mut written = Vec::new();
+        let mut stream = RecordingStream::new(
+            ScriptedIo::new(client_hello.clone()),
+            &mut recorded,
+            &mut written,
+            ByteBudget::new(Direction::ClientToServer, input_len + 1024),
+            ByteBudget::new(Direction::ServerToClient, 1024),
+        );
+
+        let accepted = accept_client_hello(&mut stream, 64).expect("ClientHello must be accepted");
+
+        assert_eq!(accepted.client_hello().server_name(), Some("capture.test"));
+        assert!(stream.stream.read_calls > 1);
+        assert_eq!(stream.stream.input.position(), input_len as u64);
+        assert_eq!(&*stream.read_bytes, &client_hello);
+    }
+
+    #[test]
+    fn alert_write_failure_does_not_hide_a_client_hello_tls_failure() {
+        let invalid_empty_client_hello = vec![22, 3, 3, 0, 4, 1, 0, 0, 0];
+        let mut stream =
+            ScriptedIo::failing_writes(invalid_empty_client_hello, io::ErrorKind::BrokenPipe);
+
+        assert!(matches!(
+            accept_client_hello(&mut stream, 8),
+            Err(InterceptionError::DownstreamTls)
+        ));
+    }
+
+    #[test]
+    fn acceptor_reassembles_multiple_records_delivered_by_one_read() {
+        let client_hello = client_hello_with_alpn(vec![HTTP_1_1.to_vec()]);
+        let fragmented = fragment_tls_records(&client_hello, 64);
+        assert!(fragmented.len() < 4096);
+        assert!(fragmented.len() > client_hello.len());
+        let mut recorded = Vec::new();
+        let mut written = Vec::new();
+        let mut stream = RecordingStream::new(
+            ScriptedIo::new(fragmented.clone()),
+            &mut recorded,
+            &mut written,
+            ByteBudget::new(Direction::ClientToServer, 4096),
+            ByteBudget::new(Direction::ServerToClient, 1024),
+        );
+
+        let accepted = accept_client_hello(&mut stream, 8).expect("ClientHello must be accepted");
+
+        assert_eq!(accepted.client_hello().server_name(), Some("capture.test"));
+        assert_eq!(stream.stream.read_calls, 1);
+        assert_eq!(&*stream.read_bytes, &fragmented);
+    }
+
+    #[test]
+    fn accepted_connection_processes_prefetched_tail_before_another_read() {
+        let client_hello = client_hello_with_alpn(vec![HTTP_1_1.to_vec()]);
+        let mut input = fragment_tls_records(&client_hello, 64);
+        input.extend_from_slice(&[23, 3, 3, 16, 0]);
+        input.extend(std::iter::repeat_n(0, 4096));
+        assert!(input.len() > 4096);
+        let input_len = input.len();
+        let mut recorded = Vec::new();
+        let mut written = Vec::new();
+        let mut stream = RecordingStream::new(
+            ScriptedIo::new(input.clone()),
+            &mut recorded,
+            &mut written,
+            ByteBudget::new(Direction::ClientToServer, input_len + 1024),
+            ByteBudget::new(Direction::ServerToClient, 16 * 1024),
+        );
+        let accepted = accept_client_hello(&mut stream, 8).expect("ClientHello must be accepted");
+        assert_eq!(stream.stream.read_calls, 1);
+        assert!(stream.stream.input.position() < input_len as u64);
+        let reads_after_accept = stream.stream.read_calls;
+        let mut connection = accepted
+            .into_connection(test_server_config())
+            .expect("the accepted ClientHello must match the server config");
+
+        assert!(matches!(
+            complete_server_handshake(&mut connection, &mut stream, 8),
+            Err(InterceptionError::DownstreamTls)
+        ));
+        assert!(stream.stream.read_calls > reads_after_accept);
+        assert_eq!(stream.stream.input.position(), input_len as u64);
+        assert_eq!(&*stream.read_bytes, &input);
+    }
+
+    #[test]
+    fn handshake_flushes_all_pending_writes_after_completion() {
+        let mut connection = PendingWritesHandshake {
+            remaining_writes: 2,
+        };
+        let mut stream = ScriptedIo::new(Vec::new());
+
+        complete_handshake(
+            &mut connection,
+            &mut stream,
+            2,
+            InterceptionFailureStage::DownstreamHandshake,
+        )
+        .expect("the operation limit must count writes, not a final state check");
+
+        assert_eq!(stream.output, vec![0, 0]);
+        assert_eq!(connection.remaining_writes, 0);
+    }
 
     #[test]
     fn request_without_content_length_is_a_zero_length_message() {
@@ -1152,5 +1515,76 @@ mod tests {
                 reason: "transfer encoding",
             })
         ));
+    }
+
+    fn client_hello_with_alpn(alpn_protocols: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut config =
+            ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("test protocol versions must be available")
+                .with_root_certificates(RootCertStore::empty())
+                .with_no_client_auth();
+        config.alpn_protocols = alpn_protocols;
+        let server_name =
+            ServerName::try_from("capture.test".to_owned()).expect("test SNI must be valid");
+        let mut connection = ClientConnection::new(Arc::new(config), server_name)
+            .expect("test client connection must initialize");
+        let mut wire = Vec::new();
+        while connection.wants_write() {
+            let written = connection
+                .write_tls(&mut wire)
+                .expect("initial ClientHello must serialize");
+            assert!(written > 0);
+        }
+        wire
+    }
+
+    fn large_alpn_protocols() -> Vec<Vec<u8>> {
+        let mut protocols = vec![HTTP_1_1.to_vec()];
+        for index in 0_u16..32 {
+            let mut protocol = vec![b'x'; 200];
+            protocol[..2].copy_from_slice(&index.to_be_bytes());
+            protocols.push(protocol);
+        }
+        protocols
+    }
+
+    fn fragment_tls_records(wire: &[u8], fragment_size: usize) -> Vec<u8> {
+        let mut fragmented = Vec::new();
+        let mut offset = 0;
+        while offset < wire.len() {
+            assert!(wire.len() - offset >= 5);
+            let payload_len = usize::from(u16::from_be_bytes([wire[offset + 3], wire[offset + 4]]));
+            let payload_start = offset + 5;
+            let payload_end = payload_start + payload_len;
+            assert!(payload_end <= wire.len());
+            for fragment in wire[payload_start..payload_end].chunks(fragment_size) {
+                fragmented.extend_from_slice(&wire[offset..offset + 3]);
+                fragmented.extend_from_slice(
+                    &u16::try_from(fragment.len())
+                        .expect("test TLS fragment must fit")
+                        .to_be_bytes(),
+                );
+                fragmented.extend_from_slice(fragment);
+            }
+            offset = payload_end;
+        }
+        fragmented
+    }
+
+    fn test_server_config() -> Arc<ServerConfig> {
+        let authority = CertificateAuthority::generate().expect("test CA generation must work");
+        let (certificate, private_key) = authority
+            .issue_server("capture.test")
+            .expect("test leaf issuance must work");
+        let mut config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("test protocol versions must be available")
+                .with_no_client_auth()
+                .with_single_cert(vec![certificate], private_key)
+                .expect("test leaf certificate must configure");
+        config.alpn_protocols = vec![HTTP_1_1.to_vec()];
+        Arc::new(config)
     }
 }

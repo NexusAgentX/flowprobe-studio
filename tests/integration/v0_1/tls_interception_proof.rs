@@ -2,9 +2,12 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use flowprobe_capture_core::{
@@ -213,6 +216,7 @@ fn silent_client_is_stopped_by_the_configured_timeout() {
         InterceptionLimits {
             io_timeout: Duration::from_millis(100),
             max_handshake_iterations: 16,
+            max_transaction_duration: Duration::from_secs(1),
         },
     )
     .expect("short positive limits must be valid");
@@ -230,6 +234,68 @@ fn silent_client_is_stopped_by_the_configured_timeout() {
             kind: std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock,
         })
     ));
+}
+
+#[test]
+fn slow_trickle_client_cannot_extend_the_transaction_deadline() {
+    let authority = CertificateAuthority::generate().expect("CA generation must succeed");
+    let interceptor = TlsInterceptor::new(
+        CaptureCore::default(),
+        authority,
+        InterceptionLimits {
+            io_timeout: Duration::from_secs(1),
+            max_handshake_iterations: 1024,
+            max_transaction_duration: Duration::from_millis(300),
+        },
+    )
+    .expect("positive interception limits must be valid");
+    let origin = origin_identity(ORIGIN_HOST);
+    let target = InterceptionTarget::new(DOWNSTREAM_HOST, ORIGIN_HOST, [origin.root])
+        .expect("target must be valid");
+    let (upstream, _unused_peer) = tcp_pair();
+    let (address, relay) = spawn_interceptor_with_stream(interceptor, target, upstream);
+    let mut client = TcpStream::connect(address).expect("slow loopback client must connect");
+    let started = Instant::now();
+    client
+        .write_all(&[22, 3, 3, 16, 0])
+        .expect("the incomplete record prefix must be delivered");
+    let delivered_drips = Arc::new(AtomicUsize::new(0));
+    for _ in 0..3 {
+        thread::sleep(Duration::from_millis(20));
+        client
+            .write_all(&[0])
+            .expect("initial drip bytes must arrive before the deadline");
+        delivered_drips.fetch_add(1, Ordering::Relaxed);
+    }
+    let keep_writing = Arc::new(AtomicBool::new(true));
+    let writer_flag = keep_writing.clone();
+    let writer_drips = delivered_drips.clone();
+    let writer = thread::spawn(move || {
+        for _ in 0..64 {
+            if !writer_flag.load(Ordering::Relaxed) || client.write_all(&[0]).is_err() {
+                break;
+            }
+            writer_drips.fetch_add(1, Ordering::Relaxed);
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+
+    let result = relay.join().expect("interception thread must not panic");
+    let elapsed = started.elapsed();
+    keep_writing.store(false, Ordering::Relaxed);
+    writer.join().expect("slow writer thread must not panic");
+
+    assert!(delivered_drips.load(Ordering::Relaxed) >= 3);
+    assert!(matches!(
+        result,
+        Err(InterceptionError::TransactionDeadlineExceeded(
+            InterceptionFailureStage::DownstreamClientHello,
+        ))
+    ));
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "the transaction deadline must expire before the one-second idle timeout"
+    );
 }
 
 fn interceptor() -> (TlsInterceptor, CertificateDer<'static>) {

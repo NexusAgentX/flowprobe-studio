@@ -32,9 +32,13 @@ authenticates the upstream server against a separately supplied root store
 before reading or forwarding the downstream HTTP request. The v0 relay handles
 one bounded HTTP/1.1 transaction with `Content-Length` framing; unsupported
 ALPNs, transfer encoding, pipelining, malformed framing, trust failures,
-timeouts, and progress or transcript-limit failures fail closed with typed
-errors. The host supplies already-connected downstream and upstream TCP
-streams, so Capture Core remains independent from routing/runtime internals.
+progress or transcript-limit failures fail closed with typed errors. Socket I/O
+has a per-operation idle timeout, while one shared monotonic transaction
+deadline covers ClientHello intake, both TLS handshakes, and the HTTP relay; a
+peer cannot extend that deadline by trickling bytes before the idle timeout.
+TLS handshakes also have an explicit read/write-operation ceiling. The host
+supplies already-connected downstream and upstream TCP streams, so Capture Core
+remains independent from routing/runtime internals.
 CA installation, persistence/rotation, HTTP/2 relay, fallback policy, and
 multi-transaction connection handling remain outside this minimum proof.
 
