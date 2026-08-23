@@ -9,9 +9,11 @@ publish.workspace = true
 [dependencies]
 flowprobe-ipc = { path = "../ipc" }
 flowprobe-model = { path = "../model" }
+flowprobe-runtime-api = { path = "../runtime-api" }
 flowprobe-storage = { path = "../storage" }
 
 [dev-dependencies]
+flowprobe-config-compiler = { path = "../config-compiler" }
 serde_json.workspace = true
 
 [lints]

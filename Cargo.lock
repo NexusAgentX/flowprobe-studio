@@ -309,6 +309,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1057,6 +1063,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowprobe-runtime-api"
+version = "0.1.0"
+dependencies = [
+ "flowprobe-config-compiler",
+]
+
+[[package]]
+name = "flowprobe-singbox-runtime"
+version = "0.1.0"
+dependencies = [
+ "flowprobe-config-compiler",
+ "flowprobe-runtime-api",
+ "nix",
+]
+
+[[package]]
 name = "flowprobe-storage"
 version = "0.1.0"
 dependencies = [
@@ -1069,8 +1091,10 @@ dependencies = [
 name = "flowprobe-supervisor"
 version = "0.1.0"
 dependencies = [
+ "flowprobe-config-compiler",
  "flowprobe-ipc",
  "flowprobe-model",
+ "flowprobe-runtime-api",
  "flowprobe-storage",
  "serde_json",
 ]
@@ -2180,6 +2204,18 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "num-conv"

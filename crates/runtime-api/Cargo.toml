@@ -1,0 +1,13 @@
+[package]
+name = "flowprobe-runtime-api"
+description = "Capability-oriented NetworkRuntime v0 boundary for FlowProbe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+flowprobe-config-compiler = { path = "../config-compiler" }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "flowprobe-singbox-runtime"
+description = "Managed independent sing-box process adapter for FlowProbe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+flowprobe-config-compiler = { path = "../../crates/config-compiler" }
+flowprobe-runtime-api = { path = "../../crates/runtime-api" }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["process", "signal"] }
+
+[lints]
+workspace = true

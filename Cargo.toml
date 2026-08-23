@@ -7,9 +7,11 @@ members = [
   "crates/config-compiler",
   "crates/ipc",
   "crates/model",
+  "crates/runtime-api",
   "crates/storage",
   "crates/supervisor",
   "plugins/demo",
+  "runtime/singbox",
 ]
 
 [workspace.package]
