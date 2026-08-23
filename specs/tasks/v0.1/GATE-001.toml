@@ -1,0 +1,9 @@
+id = "GATE-001"
+milestone = "v0.1"
+title = "Make the anti-shortcut CI gate enforce repository policy"
+goal = "Replace the narrow marker scan with a tested, repository-source gate that detects the concrete placeholder, disabled-test, and empty-handler shortcuts forbidden by the repository constitution."
+depends_on = ["PLAN-001", "FOUND-001", "INT-001"]
+allowed_paths = ["scripts/quality_gate.py", "scripts/tests/**", "scripts/prove_v0_1_local_network.py", ".github/workflows/contract.yml", "docs/milestones/v0.1.md"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**"]
+acceptance = ["python -m unittest discover -s scripts/tests -p 'test_quality_gate.py'", "python scripts/quality_gate.py", "python scripts/validate_tasks.py", "mise run check"]
+definition_of_done = ["The gate scans relevant tracked and not-ignored source under apps, crates, runtime, plugins, scripts, and tests without traversing generated dependency or build trees", "Language-aware checks reject TODO, FIXME, placeholder/stub markers, Rust todo!/unimplemented!/not-implemented panic branches, ignored Rust tests, skipped/todo/focused JavaScript tests, skipped Python unittest/pytest tests, and empty Python or JavaScript exception handlers without treating ordinary iterator skip calls as disabled tests", "Deterministic self-tests inject every forbidden form into temporary source trees and also cover legitimate near-matches", "Unreadable source and scanner failures fail closed, while diagnostics identify rule and location without printing source lines that may contain secrets", "The existing swallowed ProcessLookupError in real-proof cleanup is replaced by an explicit process-group-already-gone outcome", "CI runs the gate self-tests and the repository scan", "The corrected gate reports no existing repository violation and no test is weakened or disabled"]

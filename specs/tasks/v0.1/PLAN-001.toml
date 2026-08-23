@@ -1,0 +1,9 @@
+id = "PLAN-001"
+milestone = "v0.1"
+title = "Encode v0.1 release-audit corrective work"
+goal = "Turn the independent v0.1 release-audit findings into narrow, reviewable task contracts before any corrective implementation begins."
+depends_on = ["INT-001"]
+allowed_paths = ["specs/tasks/v0.1/PLAN-001.toml", "specs/tasks/v0.1/TLS-001.toml", "specs/tasks/v0.1/GATE-001.toml", "specs/tasks/v0.1/INT-002.toml"]
+forbidden_paths = ["PRODUCT.md", "ARCHITECTURE.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**"]
+acceptance = ["python scripts/validate_tasks.py", "git diff --check HEAD -- specs/tasks/v0.1"]
+definition_of_done = ["The missing generated-local-CA TLS interception proof is represented by a dedicated task", "The incomplete anti-shortcut CI coverage is represented by a dedicated task", "The non-hermetic curl proof and final corrected-milestone integration are represented by a downstream task", "Corrective tasks form an acyclic dependency graph and do not authorize protected architecture changes", "The pre-existing FOUND-001 through INT-001 task contracts remain byte-for-byte unchanged", "No implementation or milestone claim is changed in this planning task"]
