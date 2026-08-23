@@ -2,6 +2,10 @@
 
 use flowprobe_ipc::{AppStatus, SubsystemAvailability, SupervisorLifecycle};
 
+mod traffic;
+
+pub use traffic::TrafficService;
+
 /// Owns process and privileged-service coordination outside the renderer.
 #[derive(Debug)]
 pub struct Supervisor {
