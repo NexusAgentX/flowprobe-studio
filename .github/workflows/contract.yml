@@ -20,6 +20,8 @@ jobs:
           python-version: '3.12'
       - name: Validate task contracts
         run: python scripts/validate_tasks.py
+      - name: Test anti-shortcut quality gate
+        run: python -m unittest discover -s scripts/tests -p 'test_quality_gate.py'
       - name: Check anti-shortcut quality markers
         run: python scripts/quality_gate.py
       - name: Guard protected architecture changes

@@ -244,7 +244,8 @@ def force_runtime_cleanup(pid_file: Path) -> None:
         try:
             os.killpg(process_group, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            pid_file.unlink(missing_ok=True)
+            return
         except PermissionError:
             fail(f"cannot kill managed runtime process group {process_group}")
     deadline = time.monotonic() + 5
