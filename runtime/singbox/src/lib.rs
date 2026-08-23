@@ -1,12 +1,13 @@
 //! Thin managed-process adapter for the documented sing-box CLI.
 
 use std::{
+    collections::VecDeque,
     fmt,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::{Mutex, MutexGuard, mpsc},
+    sync::{Arc, Condvar, Mutex, MutexGuard, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -35,6 +36,8 @@ const MAX_ALLOWED_VERSION_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_ALLOWED_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_ALLOWED_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CLEANUP_REAPER_CAPACITY: usize = 64;
+const CLEANUP_REAPER_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Process paths and bounded timing used by the managed adapter.
 #[derive(Clone)]
@@ -73,12 +76,14 @@ pub struct SingBoxRuntime {
     max_config_bytes: usize,
     max_version_output_bytes: usize,
     state: Mutex<ManagedState>,
+    cleanup_reaper: CleanupReaper,
 }
 
 struct ManagedState {
     runtime_state: RuntimeState,
     child: Option<ManagedChild>,
     active_config: Option<ManagedConfig>,
+    cleanup_permit: Option<CleanupPermit>,
 }
 
 struct ManagedChild {
@@ -142,22 +147,156 @@ impl Drop for ManagedConfig {
     }
 }
 
-struct ChildGuard {
+struct PendingCleanup {
     child: Option<ManagedChild>,
+    config: Option<ManagedConfig>,
+    permit: Option<CleanupPermit>,
     operation: RuntimeOperation,
-    stop_timeout: Duration,
 }
 
-impl ChildGuard {
+impl PendingCleanup {
+    fn new(
+        child: Option<ManagedChild>,
+        config: Option<ManagedConfig>,
+        permit: Option<CleanupPermit>,
+        operation: RuntimeOperation,
+    ) -> Self {
+        Self {
+            child,
+            config,
+            permit,
+            operation,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.child.is_none() && self.config.is_none()
+    }
+
+    fn cleanup_once(&mut self, timeout: Duration) -> bool {
+        if let Some(child) = self.child.as_mut() {
+            if terminate_managed_child(child, self.operation, timeout).is_err() {
+                return false;
+            }
+            self.child = None;
+        }
+        if let Some(config) = self.config.as_mut() {
+            if config.cleanup(self.operation).is_err() {
+                return false;
+            }
+            self.config = None;
+        }
+        self.permit = None;
+        true
+    }
+}
+
+struct CleanupQueueState {
+    pending: VecDeque<PendingCleanup>,
+    owned: usize,
+    shutdown: bool,
+    worker_running: bool,
+}
+
+struct CleanupQueue {
+    state: Mutex<CleanupQueueState>,
+    changed: Condvar,
+}
+
+struct CleanupReaper {
+    queue: Arc<CleanupQueue>,
+}
+
+struct CleanupPermit {
+    queue: Arc<CleanupQueue>,
+}
+
+impl Drop for CleanupPermit {
+    fn drop(&mut self) {
+        let mut state = lock_cleanup_queue(&self.queue);
+        if state.owned > 0 {
+            state.owned -= 1;
+        }
+        self.queue.changed.notify_all();
+    }
+}
+
+impl CleanupReaper {
+    fn new() -> RuntimeResult<Self> {
+        let queue = Arc::new(CleanupQueue {
+            state: Mutex::new(CleanupQueueState {
+                pending: VecDeque::new(),
+                owned: 0,
+                shutdown: false,
+                worker_running: true,
+            }),
+            changed: Condvar::new(),
+        });
+        let worker_queue = Arc::clone(&queue);
+        thread::Builder::new()
+            .name("flowprobe-runtime-reaper".to_owned())
+            .spawn(move || cleanup_reaper_worker(worker_queue))
+            .map_err(|error| process_io(RuntimeOperation::Initialize, &error))?;
+        Ok(Self { queue })
+    }
+
+    fn acquire(&self, operation: RuntimeOperation) -> RuntimeResult<CleanupPermit> {
+        let mut state = lock_cleanup_queue(&self.queue);
+        if state.shutdown || state.owned >= CLEANUP_REAPER_CAPACITY {
+            return Err(RuntimeError::Unavailable {
+                operation,
+                reason: flowprobe_runtime_api::RuntimeUnavailableReason::Other,
+            });
+        }
+        state.owned += 1;
+        Ok(CleanupPermit {
+            queue: Arc::clone(&self.queue),
+        })
+    }
+
+    fn handoff(&self, pending: PendingCleanup) {
+        if pending.is_empty() {
+            return;
+        }
+        let mut state = lock_cleanup_queue(&self.queue);
+        state.pending.push_back(pending);
+        self.queue.changed.notify_all();
+    }
+}
+
+impl Drop for CleanupReaper {
+    fn drop(&mut self) {
+        let mut state = lock_cleanup_queue(&self.queue);
+        state.shutdown = true;
+        self.queue.changed.notify_all();
+    }
+}
+
+struct ChildGuard<'a> {
+    child: Option<ManagedChild>,
+    config: Option<ManagedConfig>,
+    permit: Option<CleanupPermit>,
+    operation: RuntimeOperation,
+    stop_timeout: Duration,
+    cleanup_reaper: &'a CleanupReaper,
+}
+
+impl<'a> ChildGuard<'a> {
     fn new(
         child: Child,
+        config: Option<ManagedConfig>,
+        permit: CleanupPermit,
         operation: RuntimeOperation,
         stop_timeout: Duration,
+        cleanup_reaper: &'a CleanupReaper,
     ) -> RuntimeResult<Self> {
         Ok(Self {
             child: Some(ManagedChild::new(child, operation)?),
+            config,
+            permit: Some(permit),
             operation,
             stop_timeout,
+            cleanup_reaper,
         })
     }
 
@@ -170,24 +309,116 @@ impl ChildGuard {
             })
     }
 
-    fn into_managed_child(mut self) -> RuntimeResult<ManagedChild> {
-        self.child.take().ok_or(RuntimeError::InternalState {
+    fn into_running_parts(mut self) -> RuntimeResult<(ManagedChild, ManagedConfig, CleanupPermit)> {
+        if self.child.is_none() || self.config.is_none() || self.permit.is_none() {
+            return Err(RuntimeError::InternalState {
+                operation: self.operation,
+            });
+        }
+        let child = self.child.take().ok_or(RuntimeError::InternalState {
             operation: self.operation,
-        })
+        })?;
+        let config = self.config.take().ok_or(RuntimeError::InternalState {
+            operation: self.operation,
+        })?;
+        let permit = self.permit.take().ok_or(RuntimeError::InternalState {
+            operation: self.operation,
+        })?;
+        Ok((child, config, permit))
     }
 
     fn terminate(&mut self) -> RuntimeResult<()> {
-        if let Some(child) = self.child.as_mut() {
-            terminate_managed_child(child, self.operation, self.stop_timeout)?;
-            self.child = None;
+        let Some(mut child) = self.child.take() else {
+            return Ok(());
+        };
+        if let Err(error) = terminate_managed_child(&mut child, self.operation, self.stop_timeout) {
+            self.cleanup_reaper.handoff(PendingCleanup::new(
+                Some(child),
+                self.config.take(),
+                self.permit.take(),
+                self.operation,
+            ));
+            return Err(error);
+        }
+        if self.config.is_none() {
+            self.permit = None;
         }
         Ok(())
     }
+
+    fn cleanup_config(&mut self) -> RuntimeResult<()> {
+        let Some(config) = self.config.as_mut() else {
+            return Ok(());
+        };
+        config.cleanup(self.operation)?;
+        self.config = None;
+        if self.child.is_none() {
+            self.permit = None;
+        }
+        Ok(())
+    }
+
+    fn handoff_remaining(&mut self) {
+        self.cleanup_reaper.handoff(PendingCleanup::new(
+            self.child.take(),
+            self.config.take(),
+            self.permit.take(),
+            self.operation,
+        ));
+    }
 }
 
-impl Drop for ChildGuard {
+impl Drop for ChildGuard<'_> {
     fn drop(&mut self) {
-        let _termination_result = self.terminate();
+        self.handoff_remaining();
+    }
+}
+
+fn lock_cleanup_queue(queue: &CleanupQueue) -> MutexGuard<'_, CleanupQueueState> {
+    match queue.state.lock() {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn wait_cleanup_queue<'a>(
+    queue: &'a CleanupQueue,
+    state: MutexGuard<'a, CleanupQueueState>,
+) -> MutexGuard<'a, CleanupQueueState> {
+    match queue.changed.wait(state) {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn cleanup_reaper_worker(queue: Arc<CleanupQueue>) {
+    loop {
+        let mut pending = {
+            let mut state = lock_cleanup_queue(&queue);
+            while state.pending.is_empty() {
+                if state.shutdown && state.owned == 0 {
+                    state.worker_running = false;
+                    queue.changed.notify_all();
+                    return;
+                }
+                state = wait_cleanup_queue(&queue, state);
+            }
+            let Some(pending) = state.pending.pop_front() else {
+                continue;
+            };
+            pending
+        };
+
+        let complete = pending.cleanup_once(CLEANUP_REAPER_ATTEMPT_TIMEOUT);
+        let mut state = lock_cleanup_queue(&queue);
+        if !complete {
+            state.pending.push_back(pending);
+        }
+        queue.changed.notify_all();
+        drop(state);
+        if !complete {
+            thread::sleep(POLL_INTERVAL);
+        }
     }
 }
 
@@ -229,6 +460,7 @@ impl SingBoxRuntime {
                 reason: "path is not a directory",
             });
         }
+        let cleanup_reaper = CleanupReaper::new()?;
 
         Ok(Self {
             executable,
@@ -242,7 +474,9 @@ impl SingBoxRuntime {
                 runtime_state: RuntimeState::Stopped { generation: 0 },
                 child: None,
                 active_config: None,
+                cleanup_permit: None,
             }),
+            cleanup_reaper,
         })
     }
 
@@ -317,14 +551,16 @@ impl SingBoxRuntime {
     }
 
     fn check_runtime_json(&self, runtime_json: &str) -> RuntimeResult<()> {
-        let mut config = self.write_config(runtime_json, RuntimeOperation::ValidateConfig)?;
+        let config = self.write_config(runtime_json, RuntimeOperation::ValidateConfig)?;
         let mut command = self.configured_command(&config.path, "check");
         command.stdout(Stdio::null()).stderr(Stdio::null());
-        let result = run_status_command(
+        run_status_command(
             &mut command,
+            Some(config),
             RuntimeOperation::ValidateConfig,
             self.command_timeout,
             self.stop_timeout,
+            &self.cleanup_reaper,
         )
         .and_then(|status| {
             if status.success() {
@@ -337,9 +573,7 @@ impl SingBoxRuntime {
             } else {
                 Err(RuntimeError::ValidationRejected)
             }
-        });
-        config.cleanup(RuntimeOperation::ValidateConfig)?;
-        result
+        })
     }
 
     fn refresh_locked(
@@ -430,12 +664,27 @@ impl NetworkRuntime for SingBoxRuntime {
                 required: RuntimePhase::Stopped,
             });
         }
+        let generation =
+            state
+                .runtime_state
+                .generation()
+                .checked_add(1)
+                .ok_or(RuntimeError::InternalState {
+                    operation: RuntimeOperation::Start,
+                })?;
 
         self.check_runtime_json(config.runtime_json())?;
         let mut managed_config =
             self.write_config(config.runtime_json(), RuntimeOperation::Start)?;
         let mut command = self.configured_command(&managed_config.path, "run");
         command.stdout(Stdio::null()).stderr(Stdio::null());
+        let cleanup_permit = match self.cleanup_reaper.acquire(RuntimeOperation::Start) {
+            Ok(permit) => permit,
+            Err(error) => {
+                managed_config.cleanup(RuntimeOperation::Start)?;
+                return Err(error);
+            }
+        };
         let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -443,10 +692,16 @@ impl NetworkRuntime for SingBoxRuntime {
                 return Err(unavailable_for_io(RuntimeOperation::Start, &error));
             }
         };
-        let mut child = match ChildGuard::new(child, RuntimeOperation::Start, self.stop_timeout) {
+        let mut child = match ChildGuard::new(
+            child,
+            Some(managed_config),
+            cleanup_permit,
+            RuntimeOperation::Start,
+            self.stop_timeout,
+            &self.cleanup_reaper,
+        ) {
             Ok(child) => child,
             Err(error) => {
-                managed_config.cleanup(RuntimeOperation::Start)?;
                 return Err(error);
             }
         };
@@ -459,30 +714,24 @@ impl NetworkRuntime for SingBoxRuntime {
             Ok(status) => status,
             Err(error) => {
                 child.terminate()?;
-                managed_config.cleanup(RuntimeOperation::Start)?;
+                child.cleanup_config()?;
                 return Err(error);
             }
         };
         if let Some(status) = startup_status {
             child.terminate()?;
-            managed_config.cleanup(RuntimeOperation::Start)?;
+            child.cleanup_config()?;
             return Err(RuntimeError::ProcessExited {
                 operation: RuntimeOperation::Start,
                 exit_code: status.code(),
             });
         }
 
-        let generation =
-            state
-                .runtime_state
-                .generation()
-                .checked_add(1)
-                .ok_or(RuntimeError::InternalState {
-                    operation: RuntimeOperation::Start,
-                })?;
         let process_id = child.child_mut()?.id();
-        state.child = Some(child.into_managed_child()?);
+        let (managed_child, managed_config, cleanup_permit) = child.into_running_parts()?;
+        state.child = Some(managed_child);
         state.active_config = Some(managed_config);
+        state.cleanup_permit = Some(cleanup_permit);
         state.runtime_state = RuntimeState::Running {
             generation,
             process_id: Some(process_id),
@@ -541,6 +790,7 @@ impl NetworkRuntime for SingBoxRuntime {
             self.command_timeout,
             self.stop_timeout,
             self.max_version_output_bytes,
+            &self.cleanup_reaper,
         )?;
         let text = std::str::from_utf8(&bytes).map_err(|_| RuntimeError::InvalidOutput {
             operation: RuntimeOperation::Version,
@@ -604,20 +854,19 @@ impl NetworkRuntime for SingBoxRuntime {
 
 impl Drop for SingBoxRuntime {
     fn drop(&mut self) {
-        let Ok(state) = self.state.get_mut() else {
-            return;
+        let state = match self.state.get_mut() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
         };
-        let process_group_gone = state.child.take().is_none_or(|mut child| {
-            terminate_managed_child(&mut child, RuntimeOperation::Stop, self.stop_timeout).is_ok()
-        });
-        if process_group_gone {
-            if let Some(config) = state.active_config.as_mut() {
-                let _cleanup_result = config.cleanup(RuntimeOperation::Stop);
-            }
-        } else if let Some(config) = state.active_config.take() {
-            std::mem::forget(config);
+        let mut pending = PendingCleanup::new(
+            state.child.take(),
+            state.active_config.take(),
+            state.cleanup_permit.take(),
+            RuntimeOperation::Stop,
+        );
+        if !pending.cleanup_once(self.stop_timeout) {
+            self.cleanup_reaper.handoff(pending);
         }
-        state.active_config = None;
     }
 }
 
@@ -725,14 +974,24 @@ fn write_private_config(file: &mut File, runtime_json: &str) -> io::Result<()> {
 
 fn run_status_command(
     command: &mut Command,
+    config: Option<ManagedConfig>,
     operation: RuntimeOperation,
     timeout: Duration,
     stop_timeout: Duration,
+    cleanup_reaper: &CleanupReaper,
 ) -> RuntimeResult<ExitStatus> {
+    let cleanup_permit = cleanup_reaper.acquire(operation)?;
     let child = command
         .spawn()
         .map_err(|error| unavailable_for_io(operation, &error))?;
-    let mut child = ChildGuard::new(child, operation, stop_timeout)?;
+    let mut child = ChildGuard::new(
+        child,
+        config,
+        cleanup_permit,
+        operation,
+        stop_timeout,
+        cleanup_reaper,
+    )?;
     let status = match wait_until(child.child_mut()?, timeout, operation) {
         Ok(Some(status)) => status,
         Ok(None) => {
@@ -740,15 +999,20 @@ fn run_status_command(
                 operation,
                 timeout_ms: duration_millis(timeout, operation)?,
             };
-            child.terminate()?;
+            if child.terminate().is_ok() {
+                child.cleanup_config()?;
+            }
             return Err(timeout_error);
         }
         Err(error) => {
-            child.terminate()?;
+            if child.terminate().is_ok() {
+                child.cleanup_config()?;
+            }
             return Err(error);
         }
     };
     child.terminate()?;
+    child.cleanup_config()?;
     Ok(status)
 }
 
@@ -758,11 +1022,20 @@ fn run_bounded_output_command(
     timeout: Duration,
     stop_timeout: Duration,
     limit: usize,
+    cleanup_reaper: &CleanupReaper,
 ) -> RuntimeResult<Vec<u8>> {
+    let cleanup_permit = cleanup_reaper.acquire(operation)?;
     let child = command
         .spawn()
         .map_err(|error| unavailable_for_io(operation, &error))?;
-    let mut child = ChildGuard::new(child, operation, stop_timeout)?;
+    let mut child = ChildGuard::new(
+        child,
+        None,
+        cleanup_permit,
+        operation,
+        stop_timeout,
+        cleanup_reaper,
+    )?;
     let stdout = child
         .child_mut()?
         .stdout
@@ -793,11 +1066,11 @@ fn run_bounded_output_command(
                 operation,
                 timeout_ms: duration_millis(timeout, operation)?,
             };
-            child.terminate()?;
+            let _cleanup_result = child.terminate();
             return Err(timeout_error);
         }
         Err(error) => {
-            child.terminate()?;
+            let _cleanup_result = child.terminate();
             return Err(error);
         }
     };
@@ -864,6 +1137,9 @@ fn terminate_managed_child(
         if group_alive {
             signal_process_group(process_group, operation, Signal::SIGKILL)?;
             kill_sent = true;
+            if started.elapsed() >= timeout {
+                return Err(termination_timeout(operation, timeout)?);
+            }
         }
     } else if group_alive {
         signal_process_group(process_group, operation, Signal::SIGTERM)?;
@@ -886,13 +1162,13 @@ fn terminate_managed_child(
         if !kill_sent && group_alive && (leader_reaped || elapsed >= graceful_timeout) {
             signal_process_group(process_group, operation, Signal::SIGKILL)?;
             kill_sent = true;
+            if started.elapsed() >= timeout {
+                return Err(termination_timeout(operation, timeout)?);
+            }
             continue;
         }
         if elapsed >= timeout {
-            return Err(RuntimeError::TimedOut {
-                operation,
-                timeout_ms: duration_millis(timeout, operation)?,
-            });
+            return Err(termination_timeout(operation, timeout)?);
         }
         thread::sleep(POLL_INTERVAL.min(timeout.saturating_sub(elapsed)));
     }
@@ -931,10 +1207,16 @@ fn cleanup_active_config(
     operation: RuntimeOperation,
 ) -> RuntimeResult<()> {
     let Some(config) = state.active_config.as_mut() else {
+        if state.child.is_none() {
+            state.cleanup_permit = None;
+        }
         return Ok(());
     };
     config.cleanup(operation)?;
     state.active_config = None;
+    if state.child.is_none() {
+        state.cleanup_permit = None;
+    }
     Ok(())
 }
 
@@ -970,7 +1252,18 @@ fn process_group_is_alive(process_group: Pid, operation: RuntimeOperation) -> Ru
 }
 
 fn duration_millis(duration: Duration, operation: RuntimeOperation) -> RuntimeResult<u64> {
-    u64::try_from(duration.as_millis()).map_err(|_| RuntimeError::InternalState { operation })
+    u64::try_from(duration.as_millis().max(1))
+        .map_err(|_| RuntimeError::InternalState { operation })
+}
+
+fn termination_timeout(
+    operation: RuntimeOperation,
+    timeout: Duration,
+) -> RuntimeResult<RuntimeError> {
+    Ok(RuntimeError::TimedOut {
+        operation,
+        timeout_ms: duration_millis(timeout, operation)?,
+    })
 }
 
 fn health_for_state(state: &RuntimeState) -> RuntimeHealth {
@@ -999,4 +1292,138 @@ fn unavailable_for_io(operation: RuntimeOperation, error: &io::Error) -> Runtime
         _ => RuntimeUnavailableReason::Other,
     };
     RuntimeError::Unavailable { operation, reason }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    fn wait_for_worker_exit(queue: &CleanupQueue) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if !lock_cleanup_queue(queue).worker_running {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "cleanup worker did not stop after all ownership returned"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn cleanup_capacity_rejects_before_spawn_and_worker_exits_after_permits_return() {
+        let reaper = CleanupReaper::new().expect("cleanup reaper should start");
+        let queue = Arc::clone(&reaper.queue);
+        let permits = (0..CLEANUP_REAPER_CAPACITY)
+            .map(|_| {
+                reaper
+                    .acquire(RuntimeOperation::Version)
+                    .expect("capacity permit should be available")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(lock_cleanup_queue(&queue).owned, CLEANUP_REAPER_CAPACITY);
+        assert!(matches!(
+            reaper.acquire(RuntimeOperation::Version),
+            Err(RuntimeError::Unavailable {
+                operation: RuntimeOperation::Version,
+                reason: flowprobe_runtime_api::RuntimeUnavailableReason::Other,
+            })
+        ));
+        let mut command = Command::new("__flowprobe_missing_cleanup_capacity_probe__");
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        assert!(matches!(
+            run_bounded_output_command(
+                &mut command,
+                RuntimeOperation::Version,
+                Duration::from_millis(10),
+                Duration::from_millis(10),
+                16,
+                &reaper,
+            ),
+            Err(RuntimeError::Unavailable {
+                operation: RuntimeOperation::Version,
+                reason: flowprobe_runtime_api::RuntimeUnavailableReason::Other,
+            })
+        ));
+
+        drop(reaper);
+        assert!(lock_cleanup_queue(&queue).worker_running);
+        drop(permits);
+        wait_for_worker_exit(&queue);
+        assert_eq!(lock_cleanup_queue(&queue).owned, 0);
+    }
+
+    #[test]
+    fn cleanup_worker_drains_pending_work_after_reaper_shutdown() {
+        let reaper = CleanupReaper::new().expect("cleanup reaper should start");
+        let queue = Arc::clone(&reaper.queue);
+        let permit = reaper
+            .acquire(RuntimeOperation::Version)
+            .expect("cleanup permit should be available");
+        reaper.handoff(PendingCleanup::new(
+            None,
+            Some(ManagedConfig {
+                path: PathBuf::new(),
+                runtime_json: String::new(),
+            }),
+            Some(permit),
+            RuntimeOperation::Version,
+        ));
+
+        drop(reaper);
+        wait_for_worker_exit(&queue);
+        let state = lock_cleanup_queue(&queue);
+        assert_eq!(state.owned, 0);
+        assert!(state.pending.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_guard_drop_transfers_process_group_ownership_to_the_worker() {
+        let reaper = CleanupReaper::new().expect("cleanup reaper should start");
+        let queue = Arc::clone(&reaper.queue);
+        let permit = reaper
+            .acquire(RuntimeOperation::Version)
+            .expect("cleanup permit should be available");
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("while :; do sleep 1; done")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let child = command.spawn().expect("fixture child should spawn");
+        let process_group =
+            Pid::from_raw(i32::try_from(child.id()).expect("Unix process id should fit in pid_t"));
+        let guard = ChildGuard::new(
+            child,
+            None,
+            permit,
+            RuntimeOperation::Version,
+            Duration::from_nanos(1),
+            &reaper,
+        )
+        .expect("child guard should own the process");
+
+        drop(guard);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if !process_group_is_alive(process_group, RuntimeOperation::Version)
+                .expect("process-group liveness should be queryable")
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "cleanup worker did not reclaim ChildGuard drop"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        drop(reaper);
+        wait_for_worker_exit(&queue);
+    }
 }

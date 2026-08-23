@@ -2,7 +2,23 @@
 set -eu
 
 fixture_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-printf '%s\n' "$$" > "$fixture_directory/last-pid"
+
+atomic_write_line() {
+  destination=$1
+  value=$2
+  temporary="$destination.tmp.$$"
+  printf '%s\n' "$value" > "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+atomic_mark_ready() {
+  destination=$1
+  temporary="$destination.tmp.$$"
+  : > "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+atomic_write_line "$fixture_directory/last-pid" "$$"
 behavior=normal
 if [ -f "$fixture_directory/behavior" ]; then
   behavior=$(sed -n '1p' "$fixture_directory/behavior")
@@ -12,18 +28,23 @@ printf '%s\n' "$*" >> "$fixture_directory/argv.log"
 
 if [ "$#" -eq 1 ] && [ "$1" = "version" ]; then
   case "$behavior" in
-    version_descendant_normal|version_descendant_exit)
+    version_descendant_normal|version_descendant_exit|version_descendant_release)
       (
         trap '' TERM HUP INT
-        : > "$fixture_directory/descendant-ready"
+        atomic_mark_ready "$fixture_directory/descendant-ready"
         while :; do sleep 1; done
       ) >/dev/null 2>&1 &
       descendant_pid=$!
-      printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+      atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
       while [ ! -f "$fixture_directory/descendant-ready" ]; do
         sleep 0.01
       done
-      : > "$fixture_directory/group-cleanup-ready"
+      atomic_mark_ready "$fixture_directory/group-cleanup-ready"
+      if [ "$behavior" = "version_descendant_release" ]; then
+        while [ ! -f "$fixture_directory/release-leader" ]; do
+          sleep 0.01
+        done
+      fi
       if [ "$behavior" = "version_descendant_exit" ]; then
         exit 19
       fi
@@ -32,21 +53,30 @@ if [ "$#" -eq 1 ] && [ "$1" = "version" ]; then
     version_pipe_descendant)
       (
         trap '' TERM HUP INT
-        : > "$fixture_directory/descendant-ready"
+        atomic_mark_ready "$fixture_directory/descendant-ready"
         while :; do sleep 1; done
       ) &
       descendant_pid=$!
-      printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+      atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
       while [ ! -f "$fixture_directory/descendant-ready" ]; do
         sleep 0.01
       done
-      : > "$fixture_directory/group-cleanup-ready"
+      atomic_mark_ready "$fixture_directory/group-cleanup-ready"
       printf 'sing-box version 1.12.0\n'
       ;;
     version_timeout)
-      sleep 10 &
-      printf '%s\n' "$!" > "$fixture_directory/descendant-pid"
-      wait "$!"
+      (
+        trap '' TERM HUP INT
+        atomic_mark_ready "$fixture_directory/descendant-ready"
+        while :; do sleep 1; done
+      ) >/dev/null 2>&1 &
+      descendant_pid=$!
+      atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
+      while [ ! -f "$fixture_directory/descendant-ready" ]; do
+        sleep 0.01
+      done
+      atomic_mark_ready "$fixture_directory/timeout-ready"
+      wait "$descendant_pid"
       ;;
     version_large)
       index=0
@@ -102,26 +132,40 @@ done
 case "$subcommand" in
   check)
     case "$behavior" in
-      check_descendant_normal|check_descendant_exit)
+      check_descendant_normal|check_descendant_exit|check_descendant_release)
         (
           trap '' TERM HUP INT
-          : > "$fixture_directory/descendant-ready"
+          atomic_mark_ready "$fixture_directory/descendant-ready"
           while :; do sleep 1; done
         ) &
         descendant_pid=$!
-        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
         while [ ! -f "$fixture_directory/descendant-ready" ]; do
           sleep 0.01
         done
-        : > "$fixture_directory/group-cleanup-ready"
+        atomic_mark_ready "$fixture_directory/group-cleanup-ready"
+        if [ "$behavior" = "check_descendant_release" ]; then
+          while [ ! -f "$fixture_directory/release-leader" ]; do
+            sleep 0.01
+          done
+        fi
         if [ "$behavior" = "check_descendant_exit" ]; then
           exit 19
         fi
         ;;
       check_timeout)
-        sleep 10 &
-        printf '%s\n' "$!" > "$fixture_directory/descendant-pid"
-        wait "$!"
+        (
+          trap '' TERM HUP INT
+          atomic_mark_ready "$fixture_directory/descendant-ready"
+          while :; do sleep 1; done
+        ) &
+        descendant_pid=$!
+        atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
+        while [ ! -f "$fixture_directory/descendant-ready" ]; do
+          sleep 0.01
+        done
+        atomic_mark_ready "$fixture_directory/timeout-ready"
+        wait "$descendant_pid"
         ;;
       check_reject)
         cat "$config_path" >&2
@@ -149,7 +193,7 @@ case "$subcommand" in
         ;;
       run_crash_marker)
         trap 'exit 0' TERM HUP INT
-        : > "$fixture_directory/run-ready"
+        atomic_mark_ready "$fixture_directory/run-ready"
         while [ ! -f "$fixture_directory/crash-now" ]; do
           sleep 0.02
         done
@@ -157,60 +201,65 @@ case "$subcommand" in
         ;;
       run_ignore_term)
         trap '' TERM HUP INT
-        : > "$fixture_directory/run-ignore-term-ready"
+        atomic_mark_ready "$fixture_directory/run-ignore-term-ready"
         while :; do sleep 1; done
         ;;
-      run_early_exit_with_descendant)
+      run_early_exit_with_descendant|run_early_exit_release)
         (
           trap '' TERM HUP INT
-          : > "$fixture_directory/descendant-ready"
+          atomic_mark_ready "$fixture_directory/descendant-ready"
           while :; do sleep 1; done
         ) &
         descendant_pid=$!
-        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
         while [ ! -f "$fixture_directory/descendant-ready" ]; do
           sleep 0.01
         done
-        : > "$fixture_directory/group-cleanup-ready"
+        atomic_mark_ready "$fixture_directory/group-cleanup-ready"
+        if [ "$behavior" = "run_early_exit_release" ]; then
+          while [ ! -f "$fixture_directory/release-leader" ]; do
+            sleep 0.01
+          done
+        fi
         exit 42
         ;;
       run_crash_with_descendant)
         trap 'exit 0' TERM HUP INT
         (
           trap '' TERM HUP INT
-          : > "$fixture_directory/descendant-ready"
+          atomic_mark_ready "$fixture_directory/descendant-ready"
           while :; do sleep 1; done
         ) &
         descendant_pid=$!
-        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
         while [ ! -f "$fixture_directory/descendant-ready" ]; do
           sleep 0.01
         done
-        : > "$fixture_directory/group-cleanup-ready"
+        atomic_mark_ready "$fixture_directory/group-cleanup-ready"
         while [ ! -f "$fixture_directory/crash-now" ]; do
           sleep 0.02
         done
-        : > "$fixture_directory/leader-exiting"
+        atomic_mark_ready "$fixture_directory/leader-exiting"
         exit 42
         ;;
       run_leader_exits_descendant_ignores_term)
         trap 'exit 0' TERM HUP INT
         (
           trap '' TERM HUP INT
-          : > "$fixture_directory/descendant-ready"
+          atomic_mark_ready "$fixture_directory/descendant-ready"
           while :; do sleep 1; done
         ) &
         descendant_pid=$!
-        printf '%s\n' "$descendant_pid" > "$fixture_directory/descendant-pid"
+        atomic_write_line "$fixture_directory/descendant-pid" "$descendant_pid"
         while [ ! -f "$fixture_directory/descendant-ready" ]; do
           sleep 0.01
         done
-        : > "$fixture_directory/group-cleanup-ready"
+        atomic_mark_ready "$fixture_directory/group-cleanup-ready"
         while :; do sleep 1; done
         ;;
       *)
         trap 'exit 0' TERM HUP INT
-        : > "$fixture_directory/run-ready"
+        atomic_mark_ready "$fixture_directory/run-ready"
         while :; do sleep 1; done
         ;;
     esac

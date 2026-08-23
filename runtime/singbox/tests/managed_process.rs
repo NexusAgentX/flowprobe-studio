@@ -4,7 +4,10 @@ use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -39,6 +42,35 @@ struct TestDirectory {
     root: PathBuf,
     executable: PathBuf,
     state_directory: PathBuf,
+}
+
+struct ProcessGroupCleanup {
+    process_group_id: i32,
+    armed: bool,
+}
+
+impl ProcessGroupCleanup {
+    fn new(process_group_id: i32) -> Self {
+        Self {
+            process_group_id,
+            armed: true,
+        }
+    }
+
+    fn confirm_gone(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProcessGroupCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _cleanup_result = killpg(
+                Pid::from_raw(self.process_group_id),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+    }
 }
 
 impl TestDirectory {
@@ -93,26 +125,21 @@ impl TestDirectory {
         fs::write(self.root.join("crash-now"), b"crash").expect("crash marker should be written");
     }
 
+    fn release_leader(&self) {
+        fs::write(self.root.join("release-leader"), b"release")
+            .expect("leader release marker should be written");
+    }
+
     fn argv_log(&self) -> String {
         fs::read_to_string(self.root.join("argv.log")).expect("argv log should exist")
     }
 
     fn recorded_pid(&self, name: &str) -> i32 {
-        self.recorded_pid_if_present(name)
+        fs::read_to_string(self.root.join(name))
             .expect("recorded process id should exist")
-    }
-
-    fn recorded_pid_if_present(&self, name: &str) -> Option<i32> {
-        match fs::read_to_string(self.root.join(name)) {
-            Ok(process_id) => Some(
-                process_id
-                    .trim()
-                    .parse()
-                    .expect("recorded process id should be numeric"),
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => panic!("recorded process id should be readable: {error}"),
-        }
+            .trim()
+            .parse()
+            .expect("recorded process id should be numeric")
     }
 
     fn wait_for_marker(&self, name: &str) {
@@ -216,9 +243,17 @@ fn assert_process_group_gone(process_group_id: i32) {
     }
 }
 
-fn assert_recorded_process_gone_if_present(directory: &TestDirectory, name: &str) {
-    if let Some(process_id) = directory.recorded_pid_if_present(name) {
-        assert_process_gone(process_id);
+fn assert_runtime_configs_gone(directory: &TestDirectory) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if directory.runtime_config_files().is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "private runtime configuration was not cleaned up"
+        );
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -405,19 +440,30 @@ fn validator_rejection_is_typed_and_never_exposes_config_or_process_output() {
 fn command_timeout_and_output_limit_are_typed_and_processes_are_cleaned_up() {
     let timeout_directory = TestDirectory::new("version_timeout");
     let mut timeout_options = timeout_directory.options();
-    timeout_options.command_timeout = Duration::from_millis(50);
+    timeout_options.command_timeout = Duration::from_secs(1);
     timeout_options.stop_timeout = Duration::from_millis(50);
     let timeout_runtime =
-        SingBoxRuntime::new(timeout_options).expect("timeout runtime should initialize");
+        Arc::new(SingBoxRuntime::new(timeout_options).expect("timeout runtime should initialize"));
+    let worker_runtime = Arc::clone(&timeout_runtime);
+    let worker = thread::spawn(move || worker_runtime.version());
+    timeout_directory.wait_for_marker("timeout-ready");
+    let leader_pid = timeout_directory.recorded_pid("last-pid");
+    let descendant_pid = timeout_directory.recorded_pid("descendant-pid");
+    let cleanup = ProcessGroupCleanup::new(leader_pid);
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
     assert_eq!(
-        timeout_runtime.version(),
+        worker.join().expect("version worker should not panic"),
         Err(RuntimeError::TimedOut {
             operation: RuntimeOperation::Version,
-            timeout_ms: 50,
+            timeout_ms: 1_000,
         })
     );
-    assert_recorded_process_gone_if_present(&timeout_directory, "last-pid");
-    assert_recorded_process_gone_if_present(&timeout_directory, "descendant-pid");
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    cleanup.confirm_gone();
 
     let output_directory = TestDirectory::new("version_large");
     let mut output_options = output_directory.options();
@@ -431,6 +477,132 @@ fn command_timeout_and_output_limit_are_typed_and_processes_are_cleaned_up() {
             limit: 32,
         })
     );
+}
+
+#[test]
+fn extremely_short_version_cleanup_is_handed_to_the_bounded_reaper() {
+    let directory = TestDirectory::new("version_descendant_release");
+    let mut options = directory.options();
+    options.stop_timeout = Duration::from_nanos(1);
+    let runtime = Arc::new(SingBoxRuntime::new(options).expect("runtime should initialize"));
+    let worker_runtime = Arc::clone(&runtime);
+    let worker = thread::spawn(move || worker_runtime.version());
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    let cleanup = ProcessGroupCleanup::new(leader_pid);
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
+    directory.release_leader();
+
+    assert_eq!(
+        worker.join().expect("version worker should not panic"),
+        Err(RuntimeError::TimedOut {
+            operation: RuntimeOperation::Version,
+            timeout_ms: 1,
+        })
+    );
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    cleanup.confirm_gone();
+}
+
+#[test]
+fn extremely_short_check_cleanup_retains_config_until_reaped() {
+    let directory = TestDirectory::new("check_descendant_release");
+    let mut options = directory.options();
+    options.stop_timeout = Duration::from_nanos(1);
+    let runtime = Arc::new(SingBoxRuntime::new(options).expect("runtime should initialize"));
+    let config = unchecked_config("{}");
+    let worker_runtime = Arc::clone(&runtime);
+    let worker = thread::spawn(move || worker_runtime.validate_config(&config));
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    let cleanup = ProcessGroupCleanup::new(leader_pid);
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
+    assert_eq!(directory.runtime_config_files().len(), 1);
+    directory.release_leader();
+
+    assert_eq!(
+        worker.join().expect("check worker should not panic"),
+        Err(RuntimeError::TimedOut {
+            operation: RuntimeOperation::ValidateConfig,
+            timeout_ms: 1,
+        })
+    );
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    assert_runtime_configs_gone(&directory);
+    cleanup.confirm_gone();
+}
+
+#[test]
+fn extremely_short_startup_cleanup_hands_off_child_and_config_together() {
+    let directory = TestDirectory::new("run_early_exit_release");
+    let mut options = directory.options();
+    options.stop_timeout = Duration::from_nanos(1);
+    let runtime = Arc::new(SingBoxRuntime::new(options).expect("runtime should initialize"));
+    let config = unchecked_config("{}");
+    let worker_runtime = Arc::clone(&runtime);
+    let worker = thread::spawn(move || worker_runtime.start(&config));
+    directory.wait_for_marker("group-cleanup-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    let cleanup = ProcessGroupCleanup::new(leader_pid);
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
+    assert_eq!(directory.runtime_config_files().len(), 1);
+    directory.release_leader();
+
+    assert_eq!(
+        worker.join().expect("startup worker should not panic"),
+        Err(RuntimeError::TimedOut {
+            operation: RuntimeOperation::Start,
+            timeout_ms: 1,
+        })
+    );
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    assert_runtime_configs_gone(&directory);
+    cleanup.confirm_gone();
+}
+
+#[test]
+fn runtime_drop_hands_extremely_short_cleanup_to_its_single_reaper() {
+    let directory = TestDirectory::new("run_leader_exits_descendant_ignores_term");
+    let leader_pid;
+    let descendant_pid;
+    let cleanup;
+    {
+        let mut options = directory.options();
+        options.stop_timeout = Duration::from_nanos(1);
+        let runtime = SingBoxRuntime::new(options).expect("runtime should initialize");
+        runtime
+            .start(&unchecked_config("{}"))
+            .expect("runtime should start");
+        directory.wait_for_marker("group-cleanup-ready");
+        leader_pid = directory.recorded_pid("last-pid");
+        descendant_pid = directory.recorded_pid("descendant-pid");
+        cleanup = ProcessGroupCleanup::new(leader_pid);
+        assert_process_alive(leader_pid);
+        assert_process_alive(descendant_pid);
+        assert_process_group_alive(leader_pid);
+        assert_eq!(directory.runtime_config_files().len(), 1);
+    }
+
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    assert_runtime_configs_gone(&directory);
+    cleanup.confirm_gone();
 }
 
 #[test]
@@ -609,7 +781,7 @@ fn startup_early_exit_reclaims_a_ready_term_ignoring_descendant() {
 
 #[test]
 fn natural_crash_refresh_reclaims_descendants_before_reporting_the_crash() {
-    for query in ["health", "state"] {
+    for query in ["health", "state", "status"] {
         let directory = TestDirectory::new("run_crash_with_descendant");
         let runtime = SingBoxRuntime::new(directory.options()).expect("runtime should initialize");
         runtime
@@ -640,6 +812,21 @@ fn natural_crash_refresh_reclaims_descendants_before_reporting_the_crash() {
                         exit_code: Some(42)
                     }
                 ),
+                "status" => {
+                    let status = runtime.status().expect("status query should succeed");
+                    matches!(
+                        status.state,
+                        RuntimeState::Crashed {
+                            generation: 1,
+                            exit_code: Some(42)
+                        }
+                    ) && matches!(
+                        status.health,
+                        RuntimeHealth::Unhealthy {
+                            exit_code: Some(42)
+                        }
+                    )
+                }
                 _ => unreachable!("test query is fixed"),
             };
             if crashed {
@@ -844,16 +1031,32 @@ fn compiled_config_size_limit_applies_before_writing_or_spawning() {
 fn check_timeout_maps_to_validator_unavailable_without_committing_a_config() {
     let directory = TestDirectory::new("check_timeout");
     let mut options = directory.options();
-    options.command_timeout = Duration::from_millis(50);
+    options.command_timeout = Duration::from_secs(1);
     options.stop_timeout = Duration::from_millis(50);
-    let runtime = SingBoxRuntime::new(options).expect("runtime should initialize");
+    let runtime = Arc::new(SingBoxRuntime::new(options).expect("runtime should initialize"));
+    let worker_runtime = Arc::clone(&runtime);
+    let worker = thread::spawn(move || {
+        RuntimeConfigValidator::validate(
+            worker_runtime.as_ref(),
+            r#"{"password":"not-a-real-secret"}"#,
+        )
+    });
+    directory.wait_for_marker("timeout-ready");
+    let leader_pid = directory.recorded_pid("last-pid");
+    let descendant_pid = directory.recorded_pid("descendant-pid");
+    let cleanup = ProcessGroupCleanup::new(leader_pid);
+    assert_process_alive(leader_pid);
+    assert_process_alive(descendant_pid);
+    assert_process_group_alive(leader_pid);
     assert_eq!(
-        RuntimeConfigValidator::validate(&runtime, r#"{"password":"not-a-real-secret"}"#),
+        worker.join().expect("check worker should not panic"),
         Err(RuntimeValidationFailure::Unavailable)
     );
-    assert_recorded_process_gone_if_present(&directory, "last-pid");
-    assert_recorded_process_gone_if_present(&directory, "descendant-pid");
-    assert!(directory.runtime_config_files().is_empty());
+    assert_process_gone(leader_pid);
+    assert_process_gone(descendant_pid);
+    assert_process_group_gone(leader_pid);
+    cleanup.confirm_gone();
+    assert_runtime_configs_gone(&directory);
 }
 
 #[test]
