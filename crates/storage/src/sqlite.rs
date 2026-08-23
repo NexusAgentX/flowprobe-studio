@@ -1,10 +1,15 @@
 use std::{collections::BTreeSet, error::Error, fmt, net::IpAddr, path::Path, str::FromStr};
 
+#[cfg(unix)]
+use std::{fs, os::unix::fs::PermissionsExt};
+
 use flowprobe_model::{
     BlobRef, CaptureSessionId, ConnectionId, FlowId, NormalizedFlowV0, ProtocolMetadata,
     TimestampNs,
 };
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior, params,
+};
 use serde_json::Value;
 
 pub const LATEST_SCHEMA_VERSION: u32 = 2;
@@ -105,7 +110,7 @@ ON semantic_events(namespace, kind, timestamp_ns DESC, event_id ASC);
 
 /// Typed storage failure that avoids echoing user values or SQL parameters.
 pub enum StorageError {
-    Database(rusqlite::Error),
+    Database,
     InvalidNormalizedFlow,
     InvalidField {
         field: &'static str,
@@ -126,6 +131,7 @@ pub enum StorageError {
     MissingCaptureSession,
     MissingSourceFlow,
     ImmutableFlowIdentity,
+    ImmutableSemanticSource,
     InvalidSemanticAttributes,
     UnsupportedSchemaVersion(i64),
     NotFlowProbeDatabase,
@@ -146,7 +152,7 @@ impl fmt::Debug for StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Database(_) => formatter.write_str("SQLite metadata operation failed"),
+            Self::Database => formatter.write_str("SQLite metadata operation failed"),
             Self::InvalidNormalizedFlow => {
                 formatter.write_str("normalized flow failed contract validation")
             }
@@ -175,6 +181,9 @@ impl fmt::Display for StorageError {
             Self::ImmutableFlowIdentity => {
                 formatter.write_str("normalized flow immutable identity fields changed")
             }
+            Self::ImmutableSemanticSource => {
+                formatter.write_str("semantic event source boundary changed")
+            }
             Self::InvalidSemanticAttributes => {
                 formatter.write_str("semantic attributes must be a bounded JSON object")
             }
@@ -197,18 +206,11 @@ impl fmt::Display for StorageError {
     }
 }
 
-impl Error for StorageError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Database(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+impl Error for StorageError {}
 
 impl From<rusqlite::Error> for StorageError {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Database(error)
+    fn from(_error: rusqlite::Error) -> Self {
+        Self::Database
     }
 }
 
@@ -561,10 +563,10 @@ impl fmt::Debug for SemanticEventInput {
             .debug_struct("SemanticEventInput")
             .field("event_id", &self.event_id)
             .field("source", &self.source)
-            .field("analyzer_id", &self.analyzer_id)
-            .field("analyzer_version", &self.analyzer_version)
-            .field("namespace", &self.namespace)
-            .field("kind", &self.kind)
+            .field("analyzer_id", &"[REDACTED]")
+            .field("analyzer_version", &"[REDACTED]")
+            .field("namespace", &"[REDACTED]")
+            .field("kind", &"[REDACTED]")
             .field("timestamp", &self.timestamp)
             .field("attributes", &"[REDACTED]")
             .finish()
@@ -592,10 +594,10 @@ impl fmt::Debug for SemanticEventRecord {
             .field("event_id", &self.event_id)
             .field("has_capture_session", &self.capture_session_id.is_some())
             .field("has_source_flow", &self.source_flow_id.is_some())
-            .field("analyzer_id", &self.analyzer_id)
-            .field("analyzer_version", &self.analyzer_version)
-            .field("namespace", &self.namespace)
-            .field("kind", &self.kind)
+            .field("analyzer_id", &"[REDACTED]")
+            .field("analyzer_version", &"[REDACTED]")
+            .field("namespace", &"[REDACTED]")
+            .field("kind", &"[REDACTED]")
             .field("timestamp", &self.timestamp)
             .field("attributes", &"[REDACTED]")
             .finish()
@@ -732,7 +734,32 @@ impl fmt::Debug for SqliteMetadataStore {
 impl SqliteMetadataStore {
     /// Opens or creates a host-owned SQLite storage file and applies migrations.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        Self::initialize(Connection::open(path)?)
+        let path = path.as_ref();
+        #[cfg(unix)]
+        let path = {
+            let file_name = path.file_name().ok_or(StorageError::Database)?;
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            fs::canonicalize(parent)
+                .map_err(|_error| StorageError::Database)?
+                .join(file_name)
+        };
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let connection = Connection::open_with_flags(&path, flags)?;
+        connection.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        #[cfg(unix)]
+        {
+            if is_flowprobe_or_empty_database(&connection)? {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .map_err(|_error| StorageError::Database)?;
+            }
+        }
+        Self::initialize(connection)
     }
 
     /// Creates a deterministic in-memory SQLite backend for behavior tests.
@@ -744,6 +771,7 @@ impl SqliteMetadataStore {
         connection.execute_batch(
             r#"PRAGMA foreign_keys = ON;
                PRAGMA trusted_schema = OFF;
+               PRAGMA secure_delete = ON;
                PRAGMA busy_timeout = 5000;"#,
         )?;
 
@@ -756,12 +784,12 @@ impl SqliteMetadataStore {
             if application_id != 0 && application_id != APPLICATION_ID {
                 return Err(StorageError::NotFlowProbeDatabase);
             }
-            let table_count: i64 = connection.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            let schema_object_count: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
                 [],
                 |row| row.get(0),
             )?;
-            if table_count != 0 {
+            if schema_object_count != 0 {
                 return Err(StorageError::NotFlowProbeDatabase);
             }
             let transaction =
@@ -887,11 +915,32 @@ impl SqliteMetadataStore {
                 Err(StorageError::InvalidSessionTiming)
             };
         }
-        self.connection.execute(
-            "UPDATE capture_sessions SET ended_at_ns = ?2 WHERE session_id = ?1",
-            params![session_id.as_str(), end_key],
+        let changed = self.connection.execute(
+            r#"UPDATE capture_sessions SET ended_at_ns = ?2
+               WHERE session_id = ?1 AND started_at_ns = ?3 AND ended_at_ns IS NULL"#,
+            params![session_id.as_str(), end_key, started_at_key],
         )?;
-        Ok(())
+        if changed == 1 {
+            return Ok(());
+        }
+
+        let current: Option<(String, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT started_at_ns, ended_at_ns FROM capture_sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match current {
+            None => Err(StorageError::SessionNotFound),
+            Some((current_start, Some(current_end)))
+                if current_start == started_at_key && current_end == end_key =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(StorageError::InvalidSessionTiming),
+        }
     }
 
     pub fn get_capture_session(
@@ -1133,6 +1182,9 @@ impl SqliteMetadataStore {
             .capture_session_id
             .as_ref()
             .map(CaptureSessionId::as_str);
+        if let Some(session) = session {
+            validate_identifier("query.capture_session_id", session)?;
+        }
         let cursor_time = query
             .after
             .as_ref()
@@ -1251,6 +1303,20 @@ impl SqliteMetadataStore {
             }
             SemanticSource::Global => (None, None),
         };
+        let existing_source: Option<(Option<String>, Option<String>)> = transaction
+            .query_row(
+                r#"SELECT capture_session_id, source_flow_id
+                   FROM semantic_events WHERE event_id = ?1"#,
+                params![event.event_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if existing_source.is_some_and(|(existing_session, existing_flow)| {
+            existing_session.as_deref() != capture_session_id.as_deref()
+                || existing_flow.as_deref() != source_flow_id
+        }) {
+            return Err(StorageError::ImmutableSemanticSource);
+        }
 
         transaction.execute(
             r#"INSERT INTO semantic_events(
@@ -1297,6 +1363,9 @@ impl SqliteMetadataStore {
             .capture_session_id
             .as_ref()
             .map(CaptureSessionId::as_str);
+        if let Some(session) = session {
+            validate_identifier("semantic.query.capture_session_id", session)?;
+        }
         let cursor_time = query
             .after
             .as_ref()
@@ -1446,6 +1515,26 @@ impl SqliteMetadataStore {
 
 fn validate_setting_key(key: &str) -> Result<(), StorageError> {
     ensure_bounded_text("setting.key", key, MAX_SETTING_KEY_BYTES, false)
+}
+
+#[cfg(unix)]
+fn is_flowprobe_or_empty_database(connection: &Connection) -> Result<bool, StorageError> {
+    let application_id: i64 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let schema_version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if schema_version != 0 {
+        return Ok(application_id == APPLICATION_ID);
+    }
+    if application_id != 0 && application_id != APPLICATION_ID {
+        return Ok(false);
+    }
+    let schema_object_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(schema_object_count == 0)
 }
 
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), StorageError> {
@@ -1818,6 +1907,8 @@ mod tests {
 
     use super::*;
 
+    const LEGACY_SCHEMA_V1: &str = include_str!("../tests/fixtures/schema-v1.sql");
+
     static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
 
     fn migration_path() -> PathBuf {
@@ -1829,13 +1920,18 @@ mod tests {
     }
 
     #[test]
+    fn first_persisted_schema_matches_the_frozen_migration_fixture() {
+        assert_eq!(SCHEMA_V1.trim(), LEGACY_SCHEMA_V1.trim());
+    }
+
+    #[test]
     fn first_persisted_schema_migrates_to_latest_and_backfills_host_index() {
         let path = migration_path();
         let _stale_cleanup = fs::remove_file(&path);
         {
             let connection = Connection::open(&path).expect("migration fixture database opens");
             connection
-                .execute_batch(SCHEMA_V1)
+                .execute_batch(LEGACY_SCHEMA_V1)
                 .expect("v1 schema creates");
             connection
                 .execute_batch("PRAGMA application_id = 1179669297; PRAGMA user_version = 1;")
@@ -1877,13 +1973,61 @@ mod tests {
             &FlowQuery::new(PageSize::new(10).expect("page size")).with_host("mixed.example"),
         ) {
             Ok(page) => page,
-            Err(StorageError::Database(error)) => {
-                panic!("backfilled host query database failure: {error:?}")
-            }
             Err(error) => panic!("backfilled host query failure: {error:?}"),
         };
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].flow_id.as_str(), "flow_migration");
+        drop(store);
+        fs::remove_file(path).expect("migration test database removes");
+    }
+
+    #[test]
+    fn failed_first_migration_is_atomic_and_can_be_retried() {
+        let path = migration_path();
+        let _stale_cleanup = fs::remove_file(&path);
+        {
+            let connection = Connection::open(&path).expect("migration fixture database opens");
+            connection
+                .execute_batch(LEGACY_SCHEMA_V1)
+                .expect("v1 schema creates");
+            connection
+                .execute_batch(
+                    r#"PRAGMA application_id = 1179669297;
+                       PRAGMA user_version = 1;
+                       CREATE INDEX normalized_flows_time_idx
+                       ON normalized_flows(flow_id);"#,
+                )
+                .expect("conflicting v1 index creates");
+        }
+
+        assert!(matches!(
+            SqliteMetadataStore::open(&path),
+            Err(StorageError::Database)
+        ));
+        {
+            let connection = Connection::open(&path).expect("failed migration database reopens");
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .expect("schema version reads");
+            assert_eq!(version, 1);
+            let host_column_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('normalized_flows') WHERE name = 'host_normalized'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("rolled-back schema reads");
+            assert_eq!(host_column_count, 0);
+            connection
+                .execute("DROP INDEX normalized_flows_time_idx", [])
+                .expect("migration conflict removes");
+        }
+
+        let store = SqliteMetadataStore::open(&path).expect("clean retry migrates");
+        assert_eq!(
+            store.schema_version().expect("migrated schema version"),
+            LATEST_SCHEMA_VERSION
+        );
         drop(store);
         fs::remove_file(path).expect("migration test database removes");
     }

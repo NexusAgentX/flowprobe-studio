@@ -1,16 +1,22 @@
 use std::{
+    error::Error,
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+    time::Duration,
 };
 
 use flowprobe_model::{
     BlobRef, CaptureSessionId, ConnectionId, FlowId, NormalizedFlowV0, TimestampNs,
 };
 use flowprobe_storage::{
-    BlobLimits, DeterministicMemoryBlobStore, FlowQuery, LATEST_SCHEMA_VERSION, MAX_PAGE_SIZE,
-    OpaquePayloadStore, PageSize, SemanticEventId, SemanticEventInput, SemanticQuery,
-    SemanticSource, SettingValue, SqliteMetadataStore, StorageError, TimeRange,
+    BlobLimits, BlobStoreError, DeterministicMemoryBlobStore, FlowQuery, LATEST_SCHEMA_VERSION,
+    MAX_PAGE_SIZE, OpaquePayloadStore, PageSize, SemanticEventId, SemanticEventInput,
+    SemanticQuery, SemanticSource, SettingValue, SqliteMetadataStore, StorageError, TimeRange,
 };
 use serde_json::{Value, json};
 
@@ -151,6 +157,13 @@ fn opening_an_unmarked_nonempty_database_fails_without_overwriting_it() {
             .execute("INSERT INTO user_owned(value) VALUES ('kept')", [])
             .expect("foreign data inserts");
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(database.path(), fs::Permissions::from_mode(0o666))
+            .expect("foreign database permissions set");
+    }
 
     assert!(matches!(
         SqliteMetadataStore::open(database.path()),
@@ -161,6 +174,132 @@ fn opening_an_unmarked_nonempty_database_fails_without_overwriting_it() {
         .query_row("SELECT value FROM user_owned", [], |row| row.get(0))
         .expect("foreign data remains");
     assert_eq!(value, "kept");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            fs::metadata(database.path())
+                .expect("foreign database metadata")
+                .permissions()
+                .mode()
+                & 0o077,
+            0o066,
+            "a rejected foreign database must not have its permissions changed"
+        );
+    }
+}
+
+#[test]
+fn opening_an_unmarked_view_only_database_does_not_adopt_or_mutate_it() {
+    let database = TempDatabase::new("foreign-view-database");
+    {
+        let connection = rusqlite::Connection::open(database.path()).expect("foreign DB opens");
+        connection
+            .execute("CREATE VIEW user_owned AS SELECT 'kept' AS value", [])
+            .expect("foreign view creates");
+    }
+
+    assert!(matches!(
+        SqliteMetadataStore::open(database.path()),
+        Err(StorageError::NotFlowProbeDatabase)
+    ));
+    let connection = rusqlite::Connection::open(database.path()).expect("foreign DB reopens");
+    let value: String = connection
+        .query_row("SELECT value FROM user_owned", [], |row| row.get(0))
+        .expect("foreign view remains");
+    assert_eq!(value, "kept");
+    let flowprobe_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'normalized_flows'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("schema remains foreign");
+    assert_eq!(flowprobe_table_count, 0);
+}
+
+#[test]
+fn sqlite_error_chain_does_not_recover_a_secret_database_path() {
+    let path = PathBuf::from(format!("flowprobe-{PAYLOAD_MARKER}\0.sqlite3"));
+    let error = SqliteMetadataStore::open(path).expect_err("NUL path must fail safely");
+
+    assert!(!format!("{error:?}").contains(PAYLOAD_MARKER));
+    assert!(
+        error.source().is_none(),
+        "safe storage errors must not expose rusqlite internals"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlite_file_is_private_and_final_symlinks_are_rejected() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let database = TempDatabase::new("private-file");
+    fs::write(database.path(), []).expect("empty database file creates");
+    fs::set_permissions(database.path(), fs::Permissions::from_mode(0o666))
+        .expect("test database permissions set");
+    let store = SqliteMetadataStore::open(database.path()).expect("empty database initializes");
+    let mode = fs::metadata(database.path())
+        .expect("database metadata")
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o077,
+        0,
+        "database must not be group/world accessible"
+    );
+    drop(store);
+
+    let link = TempDatabase::new("database-symlink");
+    symlink(database.path(), link.path()).expect("database symlink creates");
+    assert!(
+        SqliteMetadataStore::open(link.path()).is_err(),
+        "the final database path component must not be followed"
+    );
+}
+
+#[test]
+fn deleted_secret_setting_is_scrubbed_from_live_sqlite_pages() {
+    let database = TempDatabase::new("secure-delete");
+    let secret = PAYLOAD_MARKER.repeat(32);
+    {
+        let mut store = SqliteMetadataStore::open(database.path()).expect("database opens");
+        store
+            .set_setting(
+                "temporary-secret",
+                &SettingValue::new(secret.clone()).expect("bounded secret setting"),
+            )
+            .expect("secret setting inserts");
+        let session = session_id("session_secure_delete");
+        insert_session(&store, &session, 1);
+        let flow = fixture_flow(session.as_str(), "flow_secure_delete", 2, "scrub.example");
+        store
+            .upsert_flow_metadata(&flow)
+            .expect("flow metadata inserts");
+        store
+            .upsert_semantic_event(&semantic_event(
+                "event_secure_delete",
+                SemanticSource::Flow(flow.flow_id),
+                3,
+            ))
+            .expect("secret semantic event inserts");
+        assert!(
+            store
+                .delete_setting("temporary-secret")
+                .expect("secret setting deletes")
+        );
+        store
+            .delete_capture_session(&session)
+            .expect("secret semantic session deletes");
+    }
+
+    let database_bytes = fs::read(database.path()).expect("SQLite file must be readable");
+    assert!(
+        !contains_bytes(&database_bytes, PAYLOAD_MARKER.as_bytes()),
+        "deleted secret remains recoverable from live SQLite pages"
+    );
 }
 
 #[test]
@@ -286,6 +425,28 @@ fn flow_query_filters_and_keyset_pagination_are_stable_for_full_u64_time() {
         store.upsert_flow_metadata(&missing_session_flow),
         Err(StorageError::MissingCaptureSession)
     ));
+
+    let oversized_session = session_id(&"q".repeat(1025));
+    assert!(matches!(
+        store.query_flows(
+            &FlowQuery::new(PageSize::new(1).expect("page size"))
+                .for_capture_session(oversized_session.clone())
+        ),
+        Err(StorageError::FieldTooLong {
+            field: "query.capture_session_id",
+            max_bytes: 1024,
+        })
+    ));
+    assert!(matches!(
+        store.query_semantic_events(
+            &SemanticQuery::new(PageSize::new(1).expect("page size"))
+                .for_capture_session(oversized_session)
+        ),
+        Err(StorageError::FieldTooLong {
+            field: "semantic.query.capture_session_id",
+            max_bytes: 1024,
+        })
+    ));
 }
 
 #[test]
@@ -364,6 +525,29 @@ fn opaque_blob_backend_is_deterministic_bounded_and_session_deletable() {
 }
 
 #[test]
+fn opaque_blob_owner_is_bounded_before_it_is_cloned_per_entry() {
+    let oversized_owner = session_id(&"s".repeat(1025));
+    let valid_owner = session_id("session_bounded_owner");
+    let mut blobs = DeterministicMemoryBlobStore::default();
+
+    assert!(matches!(
+        blobs.put_blob(Some(&oversized_owner), b""),
+        Err(BlobStoreError::OwnerTooLong { max_bytes: 1024 })
+    ));
+    assert_eq!(blobs.entry_count(), 0);
+    assert_eq!(blobs.total_bytes(), 0);
+    assert!(matches!(
+        blobs.delete_capture_session(&oversized_owner),
+        Err(BlobStoreError::OwnerTooLong { max_bytes: 1024 })
+    ));
+
+    let reference = blobs
+        .put_blob(Some(&valid_owner), b"x")
+        .expect("valid owner inserts after rejection");
+    assert_eq!(reference.as_str(), "blob_0000000000000000");
+}
+
+#[test]
 fn explicit_opaque_source_link_is_separate_from_metadata_projection() {
     let session = session_id("session_source_link");
     let mut store = SqliteMetadataStore::open_in_memory().expect("store opens");
@@ -433,6 +617,14 @@ fn semantic_output_is_queryable_rebuildable_and_debug_redacted() {
     store
         .upsert_semantic_event(&first)
         .expect("flow semantic insert");
+    let moved_source = SemanticEventInput {
+        source: SemanticSource::Global,
+        ..first.clone()
+    };
+    assert!(matches!(
+        store.upsert_semantic_event(&moved_source),
+        Err(StorageError::ImmutableSemanticSource)
+    ));
     store
         .upsert_semantic_event(&second)
         .expect("session semantic insert");
@@ -492,6 +684,91 @@ fn semantic_output_is_queryable_rebuildable_and_debug_redacted() {
     assert!(matches!(
         store.upsert_semantic_event(&missing),
         Err(StorageError::MissingSourceFlow)
+    ));
+}
+
+#[test]
+fn semantic_debug_redacts_untrusted_identity_dimensions() {
+    let mut event = semantic_event("event_debug", SemanticSource::Global, 1);
+    event.analyzer_id = PAYLOAD_MARKER.to_owned();
+    event.analyzer_version = PAYLOAD_MARKER.to_owned();
+    event.namespace = PAYLOAD_MARKER.to_owned();
+    event.kind = PAYLOAD_MARKER.to_owned();
+
+    assert!(!format!("{event:?}").contains(PAYLOAD_MARKER));
+
+    let mut store = SqliteMetadataStore::open_in_memory().expect("store opens");
+    store
+        .upsert_semantic_event(&event)
+        .expect("bounded identity dimensions insert");
+    let record = store
+        .query_semantic_events(&SemanticQuery::new(PageSize::new(1).expect("page size")))
+        .expect("semantic event queries")
+        .items
+        .pop()
+        .expect("semantic event exists");
+    assert!(!format!("{record:?}").contains(PAYLOAD_MARKER));
+}
+
+#[test]
+fn concurrent_session_finish_cannot_move_the_retention_boundary() {
+    let database = TempDatabase::new("concurrent-finish");
+    let session = session_id("session_concurrent_finish");
+    {
+        let store = SqliteMetadataStore::open(database.path()).expect("database initializes");
+        insert_session(&store, &session, 1);
+    }
+
+    let left_store = SqliteMetadataStore::open(database.path()).expect("left store opens");
+    let right_store = SqliteMetadataStore::open(database.path()).expect("right store opens");
+    let blocker = rusqlite::Connection::open(database.path()).expect("blocker opens");
+    blocker
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("writer lock acquired");
+
+    let barrier = Arc::new(Barrier::new(3));
+    let left_barrier = Arc::clone(&barrier);
+    let left_session = session.clone();
+    let left = thread::spawn(move || {
+        left_barrier.wait();
+        left_store.finish_capture_session(&left_session, TimestampNs(10))
+    });
+    let right_barrier = Arc::clone(&barrier);
+    let right_session = session.clone();
+    let right = thread::spawn(move || {
+        right_barrier.wait();
+        right_store.finish_capture_session(&right_session, TimestampNs(20))
+    });
+
+    barrier.wait();
+    thread::sleep(Duration::from_millis(200));
+    blocker
+        .execute_batch("COMMIT")
+        .expect("writer lock releases");
+
+    let left_result = left.join().expect("left thread joins");
+    let right_result = right.join().expect("right thread joins");
+    assert_ne!(
+        left_result.is_ok(),
+        right_result.is_ok(),
+        "exactly one competing end timestamp must win"
+    );
+    let rejected = if left_result.is_err() {
+        left_result
+    } else {
+        right_result
+    };
+    assert!(matches!(rejected, Err(StorageError::InvalidSessionTiming)));
+
+    let store = SqliteMetadataStore::open(database.path()).expect("database reopens");
+    let ended_at = store
+        .get_capture_session(&session)
+        .expect("session lookup")
+        .expect("session exists")
+        .ended_at;
+    assert!(matches!(
+        ended_at,
+        Some(TimestampNs(10)) | Some(TimestampNs(20))
     ));
 }
 

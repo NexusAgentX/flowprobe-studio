@@ -2,6 +2,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use flowprobe_model::{BlobRef, BodyRef, CaptureSessionId};
 
+const MAX_OWNER_BYTES: usize = 1024;
+
 /// Hard bounds for one deterministic payload backend instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlobLimits {
@@ -68,6 +70,7 @@ pub struct PayloadDeletionSummary {
 /// Safe failure from an opaque payload backend.
 pub enum BlobStoreError {
     InvalidLimits,
+    OwnerTooLong { max_bytes: usize },
     ItemTooLarge { max_bytes: u64 },
     CapacityExceeded,
     EntryLimitExceeded { max_entries: u32 },
@@ -86,6 +89,12 @@ impl fmt::Display for BlobStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidLimits => formatter.write_str("invalid opaque payload limits"),
+            Self::OwnerTooLong { max_bytes } => {
+                write!(
+                    formatter,
+                    "opaque payload owner exceeds the {max_bytes}-byte limit"
+                )
+            }
             Self::ItemTooLarge { max_bytes } => {
                 write!(
                     formatter,
@@ -190,6 +199,7 @@ impl DeterministicMemoryBlobStore {
         bytes: &[u8],
         kind: PayloadKind,
     ) -> Result<String, BlobStoreError> {
+        validate_owner(owner)?;
         let byte_count = u64::try_from(bytes.len()).map_err(|_| BlobStoreError::IntegerOverflow)?;
         if byte_count > self.limits.max_item_bytes {
             return Err(BlobStoreError::ItemTooLarge {
@@ -320,6 +330,7 @@ impl OpaquePayloadStore for DeterministicMemoryBlobStore {
         &mut self,
         session_id: &CaptureSessionId,
     ) -> Result<PayloadDeletionSummary, BlobStoreError> {
+        validate_owner(Some(session_id))?;
         let owned: Vec<_> = self
             .entries
             .iter()
@@ -358,5 +369,15 @@ impl OpaquePayloadStore for DeterministicMemoryBlobStore {
             .checked_sub(summary.bytes)
             .ok_or(BlobStoreError::IntegerOverflow)?;
         Ok(summary)
+    }
+}
+
+fn validate_owner(owner: Option<&CaptureSessionId>) -> Result<(), BlobStoreError> {
+    if owner.is_some_and(|value| value.as_str().len() > MAX_OWNER_BYTES) {
+        Err(BlobStoreError::OwnerTooLong {
+            max_bytes: MAX_OWNER_BYTES,
+        })
+    } else {
+        Ok(())
     }
 }

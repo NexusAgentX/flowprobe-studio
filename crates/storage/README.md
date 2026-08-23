@@ -19,12 +19,19 @@ payload backend's session deletion operation so its independently retained
 opaque material follows the same retention boundary. For scheduled retention,
 `retention_candidates` returns at most one validated page of session identities
 so the coordinator can apply the payload and metadata deletions to the same
-explicit set; incomplete sessions are never selected.
+explicit set; incomplete sessions are never selected. An existing semantic
+event ID cannot be reassigned to a different source boundary during an upsert.
 
 The v0 deterministic payload backend is memory-backed and bounded by item,
 byte, and entry limits. It exposes only `BodyRef`/`BlobRef`, never a storage
 location. A durable filesystem/session backend can implement the same host
 trait without changing consumers.
+
+SQLite paths are treated as literal host paths rather than SQLite URIs, and a
+symbolic link in the final path component is rejected. On Unix the initialized
+database is restricted to owner read/write permissions. Secure deletion is
+enabled so deleted values are overwritten in live SQLite pages; filesystem
+snapshots, backups, and physical-media recovery remain host responsibilities.
 
 SQLite is supplied by `rusqlite` 0.40 with the `bundled` feature for a
 reproducible cross-platform schema/runtime. `rusqlite` is MIT licensed and
