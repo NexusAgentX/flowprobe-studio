@@ -29,7 +29,10 @@ The minimum TLS interception boundary generates a path-length-zero CA in
 memory, issues a short-lived end-entity certificate for one exact expected SNI,
 and terminates downstream TLS with an explicit rustls ring provider. It
 authenticates the upstream server against a separately supplied root store
-before reading or forwarding the downstream HTTP request. The v0 relay handles
+before reading or forwarding the downstream HTTP request.
+The expected downstream DNS identity is normalized to lowercase without an
+optional absolute-name trailing dot, matching DNS case semantics and rustls's
+RFC 6066 wire SNI form; invalid DNS names still fail closed. The v0 relay handles
 one bounded HTTP/1.1 transaction with `Content-Length` framing; unsupported
 ALPNs, transfer encoding, pipelining, malformed framing, trust failures,
 progress or transcript-limit failures fail closed with typed errors. Socket I/O

@@ -45,6 +45,31 @@ struct OriginObservation {
     requests: Vec<Vec<u8>>,
 }
 
+struct CountedClientStream {
+    stream: TcpStream,
+    written: Option<Arc<AtomicUsize>>,
+}
+
+impl Read for CountedClientStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.stream.read(buffer)
+    }
+}
+
+impl Write for CountedClientStream {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let count = self.stream.write(buffer)?;
+        if let Some(written) = &self.written {
+            written.fetch_add(count, Ordering::Relaxed);
+        }
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 #[test]
 fn generated_ca_terminates_and_independently_authenticates_a_loopback_origin() {
     let origin_identity = origin_identity(ORIGIN_HOST);
@@ -79,6 +104,57 @@ fn generated_ca_terminates_and_independently_authenticates_a_loopback_origin() {
 }
 
 #[test]
+fn mixed_case_absolute_dns_name_matches_wire_sni_and_leaf_identity() {
+    const TARGET_NAME: &str = "CAPTURE.TEST.";
+    const CLIENT_NAME: &str = "CaPtUrE.TeSt.";
+
+    let origin_identity = origin_identity(ORIGIN_HOST);
+    let origin_root = origin_identity.root.clone();
+    assert!(matches!(
+        InterceptionTarget::new("capture..test", ORIGIN_HOST, [origin_root.clone()]),
+        Err(InterceptionError::InvalidServerName)
+    ));
+    assert!(matches!(
+        InterceptionTarget::new("capture.test..", ORIGIN_HOST, [origin_root.clone()]),
+        Err(InterceptionError::InvalidServerName)
+    ));
+    let (origin_address, origin_thread) = spawn_origin(origin_identity);
+    let (interceptor, interception_root) = interceptor();
+    let target = InterceptionTarget::new(TARGET_NAME, ORIGIN_HOST, [origin_root])
+        .expect("a valid mixed-case absolute DNS name must be normalized");
+    let (interception_address, interception_thread) =
+        spawn_interceptor(interceptor, target, origin_address);
+
+    let response = run_client(
+        interception_address,
+        CLIENT_NAME,
+        [interception_root],
+        Some(REQUEST),
+    )
+    .expect("rustls must verify the normalized leaf for an equivalent absolute DNS name");
+    assert_eq!(response, RESPONSE);
+
+    let result = interception_thread
+        .join()
+        .expect("interception thread must not panic")
+        .expect("equivalent DNS identities must complete interception");
+    let origin = origin_thread.join().expect("origin thread must not panic");
+    assert_eq!(origin.requests, vec![REQUEST]);
+    assert_eq!(result.transcript.decrypted().client_to_server, REQUEST);
+    let observed_sni = result
+        .flow
+        .protocols
+        .iter()
+        .find_map(|event| match &event.metadata {
+            ProtocolMetadata::Tls(metadata) => metadata.sni.as_deref(),
+            _ => None,
+        })
+        .expect("the real wire ClientHello SNI must be present in the flow");
+    assert!(observed_sni.eq_ignore_ascii_case(DOWNSTREAM_HOST));
+    assert!(!observed_sni.ends_with('.'));
+}
+
+#[test]
 fn wrong_sni_is_rejected_before_the_upstream_is_used() {
     let (interceptor, interception_root) = interceptor();
     let unrelated_origin = origin_identity(ORIGIN_HOST);
@@ -110,7 +186,7 @@ fn a_client_without_the_interception_root_rejects_the_leaf() {
     let origin = origin_identity(ORIGIN_HOST);
     let target = InterceptionTarget::new(DOWNSTREAM_HOST, ORIGIN_HOST, [origin.root.clone()])
         .expect("target must be valid");
-    let (upstream_for_interceptor, _unused_peer) = tcp_pair();
+    let (upstream_for_interceptor, mut unused_peer) = tcp_pair();
     let (address, relay) =
         spawn_interceptor_with_stream(interceptor, target, upstream_for_interceptor);
 
@@ -124,10 +200,25 @@ fn a_client_without_the_interception_root_rejects_the_leaf() {
         .is_err(),
         "a client without the generated interception root must reject the leaf"
     );
-    assert!(matches!(
-        relay.join().expect("interception thread must not panic"),
-        Err(InterceptionError::DownstreamTls)
-    ));
+    let relay_result = relay.join().expect("interception thread must not panic");
+    assert!(
+        matches!(
+            relay_result,
+            Err(InterceptionError::DownstreamTls)
+                | Err(InterceptionError::UnexpectedEof(
+                    InterceptionFailureStage::DownstreamHandshake
+                ))
+        ),
+        "an untrusted client must fail only in the downstream handshake, got {relay_result:?}"
+    );
+    let mut upstream_bytes = Vec::new();
+    unused_peer
+        .read_to_end(&mut upstream_bytes)
+        .expect("the unused upstream peer must close cleanly");
+    assert!(
+        upstream_bytes.is_empty(),
+        "client certificate rejection must happen before upstream TLS is used"
+    );
 }
 
 #[test]
@@ -205,6 +296,137 @@ fn transcript_budget_stops_an_oversized_client_hello() {
             limit: 128,
         })
     ));
+}
+
+#[test]
+fn shared_transcript_budget_combines_wire_and_decrypted_request_bytes() {
+    const BODY_BYTES: usize = 12 * 1024;
+    const PLAINTEXT_HEADROOM: usize = 4095;
+
+    let large_request = request_with_body(BODY_BYTES);
+    let calibration_origin = origin_identity(ORIGIN_HOST);
+    let calibration_root = calibration_origin.root.clone();
+    let (calibration_origin_address, calibration_origin_thread) = spawn_origin(calibration_origin);
+    let (calibration_interceptor, calibration_interception_root) = interceptor();
+    let calibration_target =
+        InterceptionTarget::new(DOWNSTREAM_HOST, ORIGIN_HOST, [calibration_root])
+            .expect("calibration target must be valid");
+    let (calibration_address, calibration_relay) = spawn_interceptor(
+        calibration_interceptor,
+        calibration_target,
+        calibration_origin_address,
+    );
+    let calibration_response = run_client(
+        calibration_address,
+        DOWNSTREAM_HOST,
+        [calibration_interception_root],
+        Some(&large_request),
+    )
+    .expect("the unbounded calibration exchange must succeed");
+    assert_eq!(calibration_response, RESPONSE);
+    let calibration = calibration_relay
+        .join()
+        .expect("calibration relay must not panic")
+        .expect("calibration relay must succeed");
+    let calibration_origin = calibration_origin_thread
+        .join()
+        .expect("calibration origin must not panic");
+    assert_eq!(calibration_origin.requests, vec![large_request.clone()]);
+
+    let downstream_wire = calibration.transcript.downstream_wire();
+    let client_wire_bytes = downstream_wire.client_to_server.len();
+    let client_plaintext_bytes = large_request.len();
+    let server_combined_bytes = downstream_wire
+        .server_to_client
+        .len()
+        .checked_add(RESPONSE.len())
+        .expect("test server transcript size must fit usize");
+    assert!(
+        tls_record_payload_lengths(downstream_wire.client_to_server)
+            .into_iter()
+            .any(|length| length >= large_request.len()),
+        "the calibration request must occupy one approximately 12 KiB TLS fragment"
+    );
+    let shared_limit = client_wire_bytes
+        .checked_add(PLAINTEXT_HEADROOM)
+        .expect("test transcript limit must fit usize");
+    let client_combined_bytes = client_wire_bytes
+        .checked_add(client_plaintext_bytes)
+        .expect("test client transcript size must fit usize");
+    assert!(client_wire_bytes <= shared_limit);
+    assert!(client_plaintext_bytes <= shared_limit);
+    assert!(
+        client_combined_bytes > shared_limit,
+        "wire and plaintext must each fit while their combination exceeds the shared budget"
+    );
+    assert!(
+        server_combined_bytes < shared_limit,
+        "the opposite direction must remain below the shared limit"
+    );
+
+    let capture_limits = CaptureLimits {
+        max_pending_bytes_per_direction: shared_limit,
+        max_http_header_bytes: 4096,
+        max_http_body_bytes: BODY_BYTES,
+        max_http2_frame_payload_bytes: shared_limit,
+        max_hpack_string_bytes: 4096,
+        max_tls_record_bytes: shared_limit,
+        ..CaptureLimits::default()
+    };
+    let core = CaptureCore::new(capture_limits).expect("calibrated limits must be coherent");
+    let authority = CertificateAuthority::generate().expect("CA generation must succeed");
+    let interception_root = authority.certificate_der();
+    let limited_interceptor = TlsInterceptor::new(core, authority, InterceptionLimits::default())
+        .expect("limited interceptor must initialize");
+    let limited_origin = origin_identity(ORIGIN_HOST);
+    let limited_origin_root = limited_origin.root.clone();
+    let (limited_origin_address, limited_origin_thread) = spawn_origin(limited_origin);
+    let limited_target =
+        InterceptionTarget::new(DOWNSTREAM_HOST, ORIGIN_HOST, [limited_origin_root])
+            .expect("limited target must be valid");
+    let (limited_address, limited_relay) =
+        spawn_interceptor(limited_interceptor, limited_target, limited_origin_address);
+    let mut handshake_completed = false;
+    let limited_wire_bytes = Arc::new(AtomicUsize::new(0));
+
+    let client_result = run_client_observed(
+        limited_address,
+        DOWNSTREAM_HOST,
+        [interception_root],
+        Some(&large_request),
+        Some(limited_wire_bytes.clone()),
+        &mut handshake_completed,
+    );
+    assert!(
+        handshake_completed,
+        "the downstream TLS handshake must fit before the HTTP relay hits the shared budget"
+    );
+    assert!(client_result.is_err());
+    let limited_wire_bytes = limited_wire_bytes.load(Ordering::Relaxed);
+    assert_eq!(
+        limited_wire_bytes, client_wire_bytes,
+        "client TLS framing length must be deterministic across the two runs"
+    );
+    assert!(limited_wire_bytes <= shared_limit);
+    assert!(
+        limited_wire_bytes + client_plaintext_bytes > shared_limit,
+        "the limited run must independently prove the combined client budget overflow"
+    );
+    assert!(matches!(
+        limited_relay.join().expect("limited relay must not panic"),
+        Err(InterceptionError::TranscriptLimit {
+            direction: Direction::ClientToServer,
+            limit,
+        }) if limit == shared_limit
+    ));
+    let limited_origin = limited_origin_thread
+        .join()
+        .expect("limited origin must not panic");
+    assert_eq!(
+        limited_origin.requests,
+        Vec::<Vec<u8>>::new(),
+        "the shared budget must fail before an incomplete decrypted request is forwarded"
+    );
 }
 
 #[test]
@@ -410,6 +632,25 @@ fn run_client(
     roots: impl IntoIterator<Item = CertificateDer<'static>>,
     request: Option<&[u8]>,
 ) -> std::io::Result<Vec<u8>> {
+    let mut handshake_completed = false;
+    run_client_observed(
+        address,
+        server_name,
+        roots,
+        request,
+        None,
+        &mut handshake_completed,
+    )
+}
+
+fn run_client_observed(
+    address: SocketAddr,
+    server_name: &str,
+    roots: impl IntoIterator<Item = CertificateDer<'static>>,
+    request: Option<&[u8]>,
+    written: Option<Arc<AtomicUsize>>,
+    handshake_completed: &mut bool,
+) -> std::io::Result<Vec<u8>> {
     let mut root_store = RootCertStore::empty();
     for root in roots {
         root_store.add(root).expect("test root must be valid");
@@ -431,8 +672,9 @@ fn run_client(
     stream
         .set_write_timeout(Some(IO_TIMEOUT))
         .expect("client write timeout must be set");
-    let mut tls = StreamOwned::new(connection, stream);
+    let mut tls = StreamOwned::new(connection, CountedClientStream { stream, written });
     tls.conn.complete_io(&mut tls.sock)?;
+    *handshake_completed = true;
     if let Some(request) = request {
         tls.write_all(request)?;
         tls.flush()?;
@@ -440,6 +682,37 @@ fn run_client(
     } else {
         Ok(Vec::new())
     }
+}
+
+fn request_with_body(body_bytes: usize) -> Vec<u8> {
+    let mut request = format!(
+        "POST /proof HTTP/1.1\r\nHost: {ORIGIN_HOST}\r\nContent-Length: {body_bytes}\r\nConnection: close\r\n\r\n"
+    )
+    .into_bytes();
+    request.resize(request.len() + body_bytes, b'x');
+    request
+}
+
+fn tls_record_payload_lengths(wire: &[u8]) -> Vec<usize> {
+    let mut lengths = Vec::new();
+    let mut offset = 0;
+    while offset < wire.len() {
+        assert!(
+            wire.len() - offset >= 5,
+            "TLS record header must be complete"
+        );
+        let payload_bytes = usize::from(u16::from_be_bytes([wire[offset + 3], wire[offset + 4]]));
+        let record_end = offset
+            .checked_add(5 + payload_bytes)
+            .expect("test TLS record length must fit usize");
+        assert!(
+            record_end <= wire.len(),
+            "TLS record payload must be complete"
+        );
+        lengths.push(payload_bytes);
+        offset = record_end;
+    }
+    lengths
 }
 
 fn read_http_message(reader: &mut impl Read) -> std::io::Result<Vec<u8>> {

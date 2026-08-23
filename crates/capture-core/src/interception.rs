@@ -17,7 +17,9 @@ use rcgen::{
 use rustls::{
     ClientConfig, ClientConnection, ProtocolVersion, RootCertStore, ServerConfig, ServerConnection,
     StreamOwned,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
+    pki_types::{
+        CertificateDer, DnsName, InvalidDnsNameError, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName,
+    },
     server::Acceptor,
 };
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -226,10 +228,9 @@ impl CertificateAuthority {
 
     fn issue_server(
         &self,
-        server_name: &str,
+        server_name: &DnsName<'_>,
     ) -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>), InterceptionError> {
-        ServerName::try_from(server_name.to_owned())
-            .map_err(|_| InterceptionError::InvalidServerName)?;
+        let server_name = server_name.as_ref();
         let now = OffsetDateTime::now_utc();
         let mut params = CertificateParams::new(vec![server_name.to_owned()])
             .map_err(|_| InterceptionError::CertificateGeneration)?;
@@ -260,9 +261,17 @@ impl CertificateAuthority {
 /// Trusted names and roots for the two independently authenticated TLS legs.
 #[derive(Clone)]
 pub struct InterceptionTarget {
-    downstream_server_name: String,
+    downstream_server_name: DnsName<'static>,
     upstream_server_name: ServerName<'static>,
     upstream_roots: RootCertStore,
+}
+
+fn normalize_dns_name(server_name: &DnsName<'_>) -> Result<DnsName<'static>, InvalidDnsNameError> {
+    let server_name = server_name
+        .as_ref()
+        .strip_suffix('.')
+        .unwrap_or(server_name.as_ref());
+    DnsName::try_from(server_name.to_owned()).map(|server_name| server_name.to_lowercase_owned())
 }
 
 impl fmt::Debug for InterceptionTarget {
@@ -282,13 +291,10 @@ impl InterceptionTarget {
         upstream_server_name: impl Into<String>,
         upstream_trust_anchors: impl IntoIterator<Item = CertificateDer<'static>>,
     ) -> Result<Self, InterceptionError> {
-        let downstream_server_name = downstream_server_name.into();
-        if !matches!(
-            ServerName::try_from(downstream_server_name.clone()),
-            Ok(ServerName::DnsName(_))
-        ) {
-            return Err(InterceptionError::InvalidServerName);
-        }
+        let downstream_server_name = DnsName::try_from(downstream_server_name.into())
+            .map_err(|_| InterceptionError::InvalidServerName)?;
+        let downstream_server_name = normalize_dns_name(&downstream_server_name)
+            .map_err(|_| InterceptionError::InvalidServerName)?;
         let upstream_server_name = ServerName::try_from(upstream_server_name.into())
             .map_err(|_| InterceptionError::InvalidServerName)?;
         let mut upstream_roots = RootCertStore::empty();
@@ -474,6 +480,10 @@ impl TlsInterceptor {
         let supplied_sni = client_hello
             .server_name()
             .ok_or(InterceptionError::MissingServerName)?;
+        let supplied_sni =
+            DnsName::try_from(supplied_sni).map_err(|_| InterceptionError::ServerNameMismatch)?;
+        let supplied_sni =
+            normalize_dns_name(&supplied_sni).map_err(|_| InterceptionError::ServerNameMismatch)?;
         if supplied_sni != target.downstream_server_name {
             return Err(InterceptionError::ServerNameMismatch);
         }
@@ -1574,8 +1584,9 @@ mod tests {
 
     fn test_server_config() -> Arc<ServerConfig> {
         let authority = CertificateAuthority::generate().expect("test CA generation must work");
+        let server_name = DnsName::try_from("capture.test").expect("test DNS name must be valid");
         let (certificate, private_key) = authority
-            .issue_server("capture.test")
+            .issue_server(&server_name)
             .expect("test leaf issuance must work");
         let mut config =
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
