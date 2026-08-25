@@ -21,6 +21,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Fetch pinned v0.1 pull-request head objects
+        run: |
+          git fetch --no-tags --no-recurse-submodules origin \
+            '+refs/pull/11/head:refs/flowprobe-audit/pull/11/head' \
+            '+refs/pull/12/head:refs/flowprobe-audit/pull/12/head' \
+            '+refs/pull/13/head:refs/flowprobe-audit/pull/13/head' \
+            '+refs/pull/14/head:refs/flowprobe-audit/pull/14/head' \
+            '+refs/pull/15/head:refs/flowprobe-audit/pull/15/head' \
+            '+refs/pull/16/head:refs/flowprobe-audit/pull/16/head' \
+            '+refs/pull/17/head:refs/flowprobe-audit/pull/17/head' \
+            '+refs/pull/18/head:refs/flowprobe-audit/pull/18/head'
       - name: Validate task contracts
         run: python -B scripts/validate_tasks.py
       - name: Test anti-shortcut quality gate
