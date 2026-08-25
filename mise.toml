@@ -9,10 +9,13 @@ description = "Install locked JavaScript dependencies"
 run = "pnpm install --frozen-lockfile"
 
 [tasks."check:contracts"]
-description = "Validate repository task and anti-shortcut contracts"
+description = "Validate task contracts, task scope, and anti-shortcut policy"
 run = [
-  "python scripts/validate_tasks.py",
-  "python scripts/quality_gate.py",
+  "python -B scripts/validate_tasks.py",
+  "python -B -m unittest discover -s scripts/tests -p 'test_quality_gate.py'",
+  "python -B -m unittest discover -s scripts/tests -p 'test_task_scope.py'",
+  "python -B scripts/quality_gate.py",
+  "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
 ]
 
 [tasks."check:rust"]

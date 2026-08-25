@@ -2,6 +2,8 @@ name: Repository Contracts
 
 on:
   pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -10,6 +12,7 @@ permissions:
 
 jobs:
   contracts:
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,12 +21,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Fetch pinned v0.1 pull-request head objects
+        run: |
+          git fetch --no-tags --no-recurse-submodules origin \
+            '+refs/pull/11/head:refs/flowprobe-audit/pull/11/head' \
+            '+refs/pull/12/head:refs/flowprobe-audit/pull/12/head' \
+            '+refs/pull/13/head:refs/flowprobe-audit/pull/13/head' \
+            '+refs/pull/14/head:refs/flowprobe-audit/pull/14/head' \
+            '+refs/pull/15/head:refs/flowprobe-audit/pull/15/head' \
+            '+refs/pull/16/head:refs/flowprobe-audit/pull/16/head' \
+            '+refs/pull/17/head:refs/flowprobe-audit/pull/17/head' \
+            '+refs/pull/18/head:refs/flowprobe-audit/pull/18/head'
       - name: Validate task contracts
-        run: python scripts/validate_tasks.py
+        run: python -B scripts/validate_tasks.py
       - name: Test anti-shortcut quality gate
-        run: python -m unittest discover -s scripts/tests -p 'test_quality_gate.py'
+        run: python -B -m unittest discover -s scripts/tests -p 'test_quality_gate.py'
+      - name: Test task-scope gate
+        run: python -B -m unittest discover -s scripts/tests -p 'test_task_scope.py'
       - name: Check anti-shortcut quality markers
-        run: python scripts/quality_gate.py
+        run: python -B scripts/quality_gate.py
+      - name: Audit historic v0.1 task scope
+        run: >-
+          python -B scripts/check_task_scope.py audit
+          --ledger specs/nonconformance/v0.1/task-scope.toml
+      - name: Check pull-request task scope from the proposed gate
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python -B scripts/check_task_scope.py check
+          --event-file "$GITHUB_EVENT_PATH"
+          --base-ref "$BASE_SHA"
+          --head-ref "$HEAD_SHA"
       - name: Guard protected architecture changes
         if: github.event_name == 'pull_request'
         shell: bash
@@ -44,6 +74,7 @@ jobs:
 
   rust:
     name: Rust workspace
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +114,7 @@ jobs:
 
   desktop:
     name: Desktop renderer
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,3 +133,37 @@ jobs:
         run: pnpm --dir apps/desktop test
       - name: Build renderer
         run: pnpm --dir apps/desktop build
+
+  task-scope-trusted-base:
+    name: Task scope (trusted base)
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch and attest the exact pull-request head object
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/flowprobe-pr-head"
+          test "$(git rev-parse refs/remotes/origin/flowprobe-pr-head)" = "$HEAD_SHA"
+      - name: Enforce task scope using trusted base code and contract
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python -B scripts/check_task_scope.py check
+          --event-file "$GITHUB_EVENT_PATH"
+          --base-ref "$BASE_SHA"
+          --head-ref "$HEAD_SHA"
