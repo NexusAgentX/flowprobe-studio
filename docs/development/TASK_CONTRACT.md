@@ -108,6 +108,13 @@ Apply remote settings only after both workflows and CODEOWNERS are present on
 `main`. Repository files describe the desired policy; they are not evidence
 that GitHub is enforcing it.
 
+The CODEOWNERS file remains the syntax-checked ownership and trusted-actor
+inventory. It does not create a merge approval requirement. GitHub may still
+automatically request a listed owner when a pull request changes an owned path;
+FlowProbe automation and task execution do not explicitly create or re-request
+GitHub reviews. Eliminating platform-generated CODEOWNERS notifications would
+require a separate, explicitly authorized CODEOWNERS policy change.
+
 Restrict Actions to read-only workflow tokens, full-SHA pins, and the five
 repositories used by the checked-in workflows:
 
@@ -134,10 +141,9 @@ gh api --method PUT \
   -F can_approve_pull_request_reviews=false
 ```
 
-Protect `main` with strict checks from GitHub Actions app id `15368`, an
-independent code-owner approval, stale-review dismissal, last-push approval by
-someone other than the pusher, administrator enforcement, and no bypass,
-force-push, or deletion allowance:
+Protect `main` with four strict checks from GitHub Actions app id `15368`,
+administrator enforcement, no required pull-request review block, no branch
+restriction bypass, and no force-push or deletion allowance:
 
 ```text
 jq -n '{
@@ -151,14 +157,7 @@ jq -n '{
     ]
   },
   enforce_admins: true,
-  required_pull_request_reviews: {
-    dismissal_restrictions: {},
-    dismiss_stale_reviews: true,
-    require_code_owner_reviews: true,
-    required_approving_review_count: 1,
-    require_last_push_approval: true,
-    bypass_pull_request_allowances: {users: [], teams: [], apps: []}
-  },
+  required_pull_request_reviews: null,
   restrictions: null,
   required_linear_history: false,
   allow_force_pushes: false,
@@ -175,11 +174,15 @@ jq -n '{
 Capture live evidence with these read-only endpoints after configuration:
 
 ```text
+set -o pipefail
 gh api repos/NexusAgentX/flowprobe-studio/branches/main/protection
 gh api repos/NexusAgentX/flowprobe-studio/actions/permissions
 gh api repos/NexusAgentX/flowprobe-studio/actions/permissions/selected-actions
 gh api repos/NexusAgentX/flowprobe-studio/actions/permissions/workflow
-gh api repos/NexusAgentX/flowprobe-studio/codeowners/errors
+gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+  'repos/NexusAgentX/flowprobe-studio/rules/branches/main?per_page=100' | jq 'add'
+gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+  'repos/NexusAgentX/flowprobe-studio/codeowners/errors?ref=refs%2Fheads%2Fmain'
 gh api repos/NexusAgentX/flowprobe-studio/collaborators --paginate
 ```
 
@@ -187,9 +190,11 @@ The GOV-001 live acceptance uses disposable pull requests that are all closed
 unmerged and whose branches are deleted:
 
 1. A valid allowed-path pull request proves all four required checks are bound
-   to its exact head and app id, remains blocked before code-owner approval,
-   becomes eligible after approval, becomes blocked after a new push, and is
-   eligible only after a different trusted owner approves that latest push.
+   to its exact head and app id. Across the entire pull-request lifecycle, the
+   timeline has no `review_requested` or `review_request_removed` event, and the
+   opening state plus both exact head states have no requested reviewer or
+   submitted GitHub review. Each head remains blocked until all four checks pass
+   and then becomes eligible without approval.
 2. On one unchanged head SHA, edit a previously valid body to a backticked or
    otherwise invalid task identity. The `edited` event must create a new
    blocking trusted failure despite the earlier success on that SHA. A separate
@@ -204,8 +209,8 @@ unmerged and whose branches are deleted:
    `contracts`, `Rust workspace`, or `Desktop renderer`.
 
 GOV-001 and the v0.1 release remain open until the exact API snapshots,
-canaries, merged-main release audit, and an independent P0-P2-zero review all
-pass.
+canaries, merged-main release audit, and an independent technical P0-P2-zero
+review performed without a GitHub approval or review request all pass.
 
 ## Architecture tasks
 
