@@ -23,3 +23,5 @@ See [PRODUCT.md](PRODUCT.md), [ARCHITECTURE.md](ARCHITECTURE.md), [ROADMAP.md](R
 This repository is designed for AI-assisted, contract-first development. Architecture, product scope, task contracts, acceptance commands, and protected paths are versioned in the repository. Implementation agents work one milestone/task contract at a time and must not redefine product or architecture while implementing.
 
 Start with `docs/milestones/v0.1.md` and the task contracts under `specs/tasks/v0.1/`.
+
+This disposable line exercises the GOV-001 out-of-scope protection canary.
