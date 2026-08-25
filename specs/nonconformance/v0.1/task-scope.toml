@@ -1,0 +1,545 @@
+schema_version = 1
+kind = "flowprobe-task-scope-nonconformance"
+milestone = "v0.1"
+status = "historic-nonconformance-corrected-and-closed"
+correction_task = "SCOPE-001"
+history_tip = "8e1461305206d93fdd068711310f8ba38cd8b158"
+correction_base = "f8fdf889aa51c35e1a081018e402008f53a72acf"
+first_base = "38e135035e9f5c42cacb7d0b4e224e3fe22e9d64"
+pull_request_count = 8
+instance_count = 15
+adoption_count = 4
+canonical_path = "specs/nonconformance/v0.1/task-scope.toml"
+statement = "Pull requests 11 through 18 contained disclosed and task-relevant root build changes outside their literal allowed_paths at merge time. SCOPE-001 preserves that nonconformance, adopts the necessary build state, and prevents recurrence; it does not waive the repository constitution or claim retroactive compliance."
+
+[[pull_requests]]
+number = 11
+task_id = "FOUND-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/11"
+base_commit = "38e135035e9f5c42cacb7d0b4e224e3fe22e9d64"
+head_commit = "2898b2ee6e553736a34274cf6ed9395a31eee458"
+merge_commit = "e0e71b2267f321aae1bafd766e034a9696c29729"
+merge_kind = "squash"
+contract_path = "specs/tasks/v0.1/FOUND-001.toml"
+contract_blob = "32a35f15477118a14d8a17606ac65ca7941811d3"
+disclosure_id = "pr-11"
+nonconformance_instance_count = 1
+
+[[pull_requests]]
+number = 12
+task_id = "FLOW-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/12"
+base_commit = "e0e71b2267f321aae1bafd766e034a9696c29729"
+head_commit = "9c0afe77c2e6df9b02c5d1a8eecf84b51135ba21"
+merge_commit = "0adc28d868b6a65662f3bfed6b01729db41d9de1"
+merge_kind = "squash"
+contract_path = "specs/tasks/v0.1/FLOW-001.toml"
+contract_blob = "92c0ef22f48742b66630809ae974e080d605d325"
+disclosure_id = "pr-12"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 13
+task_id = "CFG-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/13"
+base_commit = "0adc28d868b6a65662f3bfed6b01729db41d9de1"
+head_commit = "5e58d9f84edb57253ce964fbb4c0ec1aa232b21f"
+merge_commit = "2b9df6bf7d0ad572a727e5ba3d4a3b134a869e39"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/CFG-001.toml"
+contract_blob = "a1719f83ab040f5ce32912aa8559b331875a9ec7"
+disclosure_id = "pr-13"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 14
+task_id = "CAP-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/14"
+base_commit = "2b9df6bf7d0ad572a727e5ba3d4a3b134a869e39"
+head_commit = "5d767f813862fa3306042c9d09c535c6ce9d906f"
+merge_commit = "8ba0f1d62ee4d765fb4541cea8d9530d298b9092"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/CAP-001.toml"
+contract_blob = "e3c7b628b9563f98f8fe74450225052101117d60"
+disclosure_id = "pr-14"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 15
+task_id = "STORE-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/15"
+base_commit = "8ba0f1d62ee4d765fb4541cea8d9530d298b9092"
+head_commit = "7ce50668f1a597c904352c6ae47cc10b4e8f386a"
+merge_commit = "d815b51ea08c2349298419a5e65c928334e04d52"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/STORE-001.toml"
+contract_blob = "1c27fef7eea199e0f1e4cc9aa0ce784195b00076"
+disclosure_id = "pr-15"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 16
+task_id = "UI-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/16"
+base_commit = "d815b51ea08c2349298419a5e65c928334e04d52"
+head_commit = "ca2253f1857f562cfd72aec8b25f3d7438f13af4"
+merge_commit = "80b58864df05a6223f9ac32059183eb521aae286"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/UI-001.toml"
+contract_blob = "e7364e1619869a4fd89ba2b7f808f883462ed106"
+disclosure_id = "pr-16"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 17
+task_id = "WASM-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/17"
+base_commit = "80b58864df05a6223f9ac32059183eb521aae286"
+head_commit = "5ea5978668c52753effb32a3bf4b048bcc664880"
+merge_commit = "160f56885cae5e353c7ba3bf09ef43f598df3932"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/WASM-001.toml"
+contract_blob = "61c735e6bf003ebe3f32f9ff0fd53ba2890fd6cd"
+disclosure_id = "pr-17"
+nonconformance_instance_count = 2
+
+[[pull_requests]]
+number = 18
+task_id = "NET-001"
+url = "https://github.com/NexusAgentX/flowprobe-studio/pull/18"
+base_commit = "160f56885cae5e353c7ba3bf09ef43f598df3932"
+head_commit = "b158b820d5865250a34ffe32a49f8751484b236f"
+merge_commit = "4c656e442303cface91c229af447eac347bcd70a"
+merge_kind = "merge"
+contract_path = "specs/tasks/v0.1/NET-001.toml"
+contract_blob = "8d4fd05eba94122f442e363d6e133eb049ba87fb"
+disclosure_id = "pr-18"
+nonconformance_instance_count = 2
+
+[[disclosures]]
+id = "pr-11"
+pr_number = 11
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/11"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 3481
+source_sha256 = "64d83f04027ccec702232677afe6fb2826ccf94a08c5990f9e088f50a0b9a997"
+excerpt = "mise.toml is the only supporting path outside the original allowed_paths list and was explicitly authorized by the project owner."
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-12"
+pr_number = 12
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/12"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 2167
+source_sha256 = "9fbe59d9610955bae8c0b18eebcb3c5edab389c9477b4e11453224933d369111"
+excerpt = "register crates/model in the root Cargo workspace"
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-13"
+pr_number = 13
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/13"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 2914
+source_sha256 = "2dd4080b81afbe3b01dee3337f2d48dd54c8edfbd9e3f9bafd4d4557ef405f40"
+excerpt = "Root Cargo.toml and Cargo.lock changes only register the task-owned crate in the existing workspace."
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-14"
+pr_number = 14
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/14"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 2461
+source_sha256 = "63e54f078bae1cba8e82d290e17278ab3c381fb2f8a41b1bc74249071850b352"
+excerpt = "Root Cargo.toml and Cargo.lock changes are the minimal supporting workspace registration and generated local-package lock metadata required for root acceptance."
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-15"
+pr_number = 15
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/15"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 2826
+source_sha256 = "209735f63a9633391becac72cf257deef24434f505476e717752942c22f2ba28"
+excerpt = "Root Cargo.toml and Cargo.lock changes are minimal supporting workspace registration and generated dependency resolution required for root acceptance."
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-16"
+pr_number = 16
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/16"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 1537
+source_sha256 = "f1ee2589647489958892650f8244ec035a77d468e44406d711821adbfbc28825"
+excerpt = "root Cargo.lock and pnpm-lock.yaml are mechanical supporting lockfile updates required by task-scoped dependencies"
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-17"
+pr_number = 17
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/17"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 2711
+source_sha256 = "0adf163f43b9c8a88626024dc1c221ef42fb0a3a7a4e2d8d32672ac7cf9e7de2"
+excerpt = "root Cargo.toml/Cargo.lock are mechanical workspace/dependency support changes"
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[disclosures]]
+id = "pr-18"
+pr_number = 18
+source_kind = "github-pull-request-body"
+source_url = "https://github.com/NexusAgentX/flowprobe-studio/pull/18"
+retrieved_at = "2026-08-25T04:59:40Z"
+source_utf8_bytes = 3518
+source_sha256 = "89d426599738613bf7118654af0d168a42880ef2e7cfdf07038bf75697c8bf8f"
+excerpt = "Add the two required root workspace members and refresh Cargo.lock; these are small supporting changes permitted by the task-contract format."
+interpretation = "disclosed-but-did-not-authorize-outside-allowed-paths"
+
+[[instances]]
+pr_number = 11
+task_id = "FOUND-001"
+change_status = "A"
+path_role = "new"
+path = "mise.toml"
+old_path = ""
+new_path = "mise.toml"
+old_mode = "000000"
+new_mode = "100644"
+old_blob = "0000000000000000000000000000000000000000"
+new_blob = "0cb1160341f3dff369d20056944e287b2bc2c0b6"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Pins the Rust, Node, pnpm, and Python toolchain and defines the reproducible foundation bootstrap and check tasks."
+disclosure_id = "pr-11"
+
+[[instances]]
+pr_number = 12
+task_id = "FLOW-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "a4344e109f76eed346a3ebab64078b030f6c7811"
+new_blob = "25255bc1537312145b3941b468e1212d3500703c"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/model in the root workspace and exposes serde_json as a workspace dependency for the normalized-flow implementation."
+disclosure_id = "pr-12"
+
+[[instances]]
+pr_number = 12
+task_id = "FLOW-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "f6ad33c8c0dd958d68975fb57ef5e62f001d2876"
+new_blob = "f810dd64ff81a02155790b25196545215b1fee0f"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks the new local flowprobe-model package and its normalized-flow dependency edges."
+disclosure_id = "pr-12"
+
+[[instances]]
+pr_number = 13
+task_id = "CFG-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "25255bc1537312145b3941b468e1212d3500703c"
+new_blob = "0259513b4c5d72302f4cef0f0b4c9ef2075ad683"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/config-compiler as a root workspace member."
+disclosure_id = "pr-13"
+
+[[instances]]
+pr_number = 13
+task_id = "CFG-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "f810dd64ff81a02155790b25196545215b1fee0f"
+new_blob = "5b22fbaa05ad07fa833a42a5e7041ee1d5229199"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks the new local flowprobe-config-compiler package entry."
+disclosure_id = "pr-13"
+
+[[instances]]
+pr_number = 14
+task_id = "CAP-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "0259513b4c5d72302f4cef0f0b4c9ef2075ad683"
+new_blob = "ab814fb2fbd07f6bbf7c50877d419d7c5e04bf1b"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/capture-core as a root workspace member."
+disclosure_id = "pr-14"
+
+[[instances]]
+pr_number = 14
+task_id = "CAP-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "5b22fbaa05ad07fa833a42a5e7041ee1d5229199"
+new_blob = "f4236557af1e42e78a7226fe55b2f20fb980ac7a"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks Capture Core, flowprobe-model, httparse, and serde_json dependency edges."
+disclosure_id = "pr-14"
+
+[[instances]]
+pr_number = 15
+task_id = "STORE-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "ab814fb2fbd07f6bbf7c50877d419d7c5e04bf1b"
+new_blob = "df0e5e14f27a884410cdbf1b316c670c4d39759c"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/storage as a root workspace member."
+disclosure_id = "pr-15"
+
+[[instances]]
+pr_number = 15
+task_id = "STORE-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "f4236557af1e42e78a7226fe55b2f20fb980ac7a"
+new_blob = "0d832fa8992c6a6c0dd7ae52a1dcf8899534fd8c"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks flowprobe-storage, rusqlite, libsqlite3-sys, and their storage dependency edges."
+disclosure_id = "pr-15"
+
+[[instances]]
+pr_number = 16
+task_id = "UI-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "0d832fa8992c6a6c0dd7ae52a1dcf8899534fd8c"
+new_blob = "c252dfe55385807a354dff351d92b6578ad8cd34"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks the desktop and supervisor dependency edges to storage, model, and serde_json."
+disclosure_id = "pr-16"
+
+[[instances]]
+pr_number = 16
+task_id = "UI-001"
+change_status = "M"
+path_role = "both"
+path = "pnpm-lock.yaml"
+old_path = "pnpm-lock.yaml"
+new_path = "pnpm-lock.yaml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "136f19c724b6566947682608f7f54ccf20618e1a"
+new_blob = "3469ae3727c6de8af9661e2f68a43ad6dacfd444"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks the renderer test dependencies used by the Traffic proof UI."
+disclosure_id = "pr-16"
+
+[[instances]]
+pr_number = 17
+task_id = "WASM-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "df0e5e14f27a884410cdbf1b316c670c4d39759c"
+new_blob = "97f2f4fc951fcc8dd8b6906e1ef695f41d085d6d"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/analyzer-runtime and plugins/demo as root workspace members."
+disclosure_id = "pr-17"
+
+[[instances]]
+pr_number = 17
+task_id = "WASM-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "c252dfe55385807a354dff351d92b6578ad8cd34"
+new_blob = "f4c3e5011c4eda31e00b8931b50d61f8b4a3710b"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks the analyzer, demo plugin, Wasmtime, Cranelift, and component-model dependency graph."
+disclosure_id = "pr-17"
+
+[[instances]]
+pr_number = 18
+task_id = "NET-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.toml"
+old_path = "Cargo.toml"
+new_path = "Cargo.toml"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "97f2f4fc951fcc8dd8b6906e1ef695f41d085d6d"
+new_blob = "c45e7e5eb0d99225181d1ef16ee4b568de79849f"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Registers crates/runtime-api and runtime/singbox as root workspace members."
+disclosure_id = "pr-18"
+
+[[instances]]
+pr_number = 18
+task_id = "NET-001"
+change_status = "M"
+path_role = "both"
+path = "Cargo.lock"
+old_path = "Cargo.lock"
+new_path = "Cargo.lock"
+old_mode = "100644"
+new_mode = "100644"
+old_blob = "f4c3e5011c4eda31e00b8931b50d61f8b4a3710b"
+new_blob = "8fa0b26d3d7fab220200f8502d9c323dbdfe62c3"
+allowed_matches = []
+forbidden_matches = []
+literal_allowed = false
+literal_forbidden = false
+decision = "outside_allowed_paths"
+task_relevance = "Locks flowprobe-runtime-api, flowprobe-singbox-runtime, nix, and their runtime dependency edges."
+disclosure_id = "pr-18"
+
+[[adoptions]]
+path = "Cargo.toml"
+baseline_commit = "8e1461305206d93fdd068711310f8ba38cd8b158"
+baseline_blob = "c617923d02b77d1700acc0c573422726dd3f6d5b"
+adopted_blob = "c617923d02b77d1700acc0c573422726dd3f6d5b"
+supports_tasks = ["FLOW-001", "CFG-001", "CAP-001", "STORE-001", "WASM-001", "NET-001"]
+necessity = "The root workspace membership and shared dependency declarations are required for the affected crates to participate in the locked root acceptance commands."
+verification = ["cargo metadata --locked --format-version 1 --no-deps", "cargo test --workspace --locked"]
+content_change = "none"
+
+[[adoptions]]
+path = "Cargo.lock"
+baseline_commit = "8e1461305206d93fdd068711310f8ba38cd8b158"
+baseline_blob = "0e92c138589485a5aa195c2a58e7d7e063daf42d"
+adopted_blob = "0e92c138589485a5aa195c2a58e7d7e063daf42d"
+supports_tasks = ["FLOW-001", "CFG-001", "CAP-001", "STORE-001", "UI-001", "WASM-001", "NET-001"]
+necessity = "The root lock file fixes the exact local-package and third-party dependency resolution used by the affected Rust implementations."
+verification = ["cargo metadata --locked --format-version 1 --no-deps", "cargo test --workspace --locked"]
+content_change = "none"
+
+[[adoptions]]
+path = "pnpm-lock.yaml"
+baseline_commit = "8e1461305206d93fdd068711310f8ba38cd8b158"
+baseline_blob = "3469ae3727c6de8af9661e2f68a43ad6dacfd444"
+adopted_blob = "3469ae3727c6de8af9661e2f68a43ad6dacfd444"
+supports_tasks = ["UI-001"]
+necessity = "The pnpm lock file fixes the renderer testing dependency graph used by the Traffic proof UI."
+verification = ["pnpm install --frozen-lockfile", "pnpm --dir apps/desktop test"]
+content_change = "none"
+
+[[adoptions]]
+path = "mise.toml"
+baseline_commit = "8e1461305206d93fdd068711310f8ba38cd8b158"
+baseline_blob = "0cb1160341f3dff369d20056944e287b2bc2c0b6"
+adopted_blob = "f096625b27afb193674ae970de175cdfb3616a96"
+supports_tasks = ["FOUND-001", "SCOPE-001"]
+necessity = "The pinned local toolchain and reproducible project commands are foundation state; SCOPE-001 adds only the required contract self-tests and offline scope audit to check:contracts."
+verification = ["mise run check:contracts", "mise run check"]
+content_change = "scope-gate-integration"
