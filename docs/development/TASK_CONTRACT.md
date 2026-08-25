@@ -195,6 +195,7 @@ unmerged and whose branches are deleted:
    opening state plus both exact head states have no requested reviewer or
    submitted GitHub review. Each head remains blocked until all four checks pass
    and then becomes eligible without approval.
+   This disposable sentence exercises that status-only canary and must remain unmerged.
 2. On one unchanged head SHA, edit a previously valid body to a backticked or
    otherwise invalid task identity. The `edited` event must create a new
    blocking trusted failure despite the earlier success on that SHA. A separate
