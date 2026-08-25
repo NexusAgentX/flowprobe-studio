@@ -159,19 +159,24 @@ jobs:
 
   task-scope-trusted-base:
     name: ${{ github.event_name == 'pull_request_target' && 'Task scope (trusted base)' || 'Task scope (not applicable)' }}
-    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Mark the trusted-base audit as not applicable
+        if: github.event_name != 'pull_request_target'
+        run: echo "Trusted-base task-scope audit is only active for pull_request_target."
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: github.event_name == 'pull_request_target'
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: github.event_name == 'pull_request_target'
         with:
           python-version: '3.12'
       - name: Fetch and attest the exact pull-request head object
+        if: github.event_name == 'pull_request_target'
         shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -182,6 +187,7 @@ jobs:
             "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/flowprobe-pr-head"
           test "$(git rev-parse refs/remotes/origin/flowprobe-pr-head)" = "$HEAD_SHA"
       - name: Enforce task scope using trusted base code and contract
+        if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
