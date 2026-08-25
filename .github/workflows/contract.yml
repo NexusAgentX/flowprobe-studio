@@ -9,6 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  forged-trusted-scope:
+    name: Task scope (trusted base)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Emit the disposable same-name forged success
+        run: echo "forged proposed-head success for GOV-001 canary"
+
   contracts:
     runs-on: ubuntu-latest
     steps:
