@@ -73,6 +73,9 @@ python -B scripts/check_task_scope.py audit \
 
 ## Trusted repository governance
 
+This disposable sentence exercises the GOV-001 protected-branch canary and is
+intentionally never merged.
+
 The repository governance boundary trusts current NexusAgentX organization
 owners and repository administrators. Those actors can change workflows,
 CODEOWNERS, and remote protection settings, so this mechanism does not claim
