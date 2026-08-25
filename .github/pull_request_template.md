@@ -1,7 +1,7 @@
 ## Task
 
-Task ID: `XXX-000`
-Milestone: `vX.Y`
+Task ID: XXX-000
+Milestone: vX.Y
 
 ## Scope
 
@@ -10,16 +10,14 @@ Milestone: `vX.Y`
 
 ## Contract impact
 
-- [ ] No accepted ADR or `docs/contracts/**` file changed.
-- [ ] If architecture/contracts changed, this is an explicit `ARCH-*` task with migration rationale.
+- [ ] No accepted ADR or docs/contracts/** file changed.
+- [ ] If architecture/contracts changed, this is an explicit ARCH-* task with migration rationale.
 
 ## Verification
 
 Commands run and results:
 
-```text
-<exact acceptance commands and PASS evidence>
-```
+- <exact acceptance commands and PASS evidence>
 
 - [ ] Task acceptance commands pass.
 - [ ] Existing golden fixtures were not changed unless task explicitly permits it.
