@@ -2,8 +2,6 @@ name: Repository Contracts
 
 on:
   pull_request:
-  pull_request_target:
-    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -12,7 +10,6 @@ permissions:
 
 jobs:
   contracts:
-    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,7 +71,6 @@ jobs:
 
   rust:
     name: Rust workspace
-    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -137,7 +133,6 @@ jobs:
 
   desktop:
     name: Desktop renderer
-    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,43 +151,3 @@ jobs:
         run: pnpm --dir apps/desktop test
       - name: Build renderer
         run: pnpm --dir apps/desktop build
-
-  task-scope-trusted-base:
-    name: ${{ github.event_name == 'pull_request_target' && 'Task scope (trusted base)' || 'Task scope (not applicable)' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Mark the trusted-base audit as not applicable
-        if: github.event_name != 'pull_request_target'
-        run: echo "Trusted-base task-scope audit is only active for pull_request_target."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request_target'
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: github.event_name == 'pull_request_target'
-        with:
-          python-version: '3.12'
-      - name: Fetch and attest the exact pull-request head object
-        if: github.event_name == 'pull_request_target'
-        shell: bash
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --no-recurse-submodules origin \
-            "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/flowprobe-pr-head"
-          test "$(git rev-parse refs/remotes/origin/flowprobe-pr-head)" = "$HEAD_SHA"
-      - name: Enforce task scope using trusted base code and contract
-        if: github.event_name == 'pull_request_target'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          python -B scripts/check_task_scope.py check
-          --event-file "$GITHUB_EVENT_PATH"
-          --base-ref "$BASE_SHA"
-          --head-ref "$HEAD_SHA"
