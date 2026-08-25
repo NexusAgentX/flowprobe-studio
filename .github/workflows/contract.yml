@@ -15,10 +15,10 @@ jobs:
     if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Fetch pinned v0.1 pull-request head objects
@@ -77,7 +77,20 @@ jobs:
     if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Fetch pinned v0.1 pull-request head objects
+        run: |
+          git fetch --no-tags --no-recurse-submodules origin \
+            '+refs/pull/11/head:refs/flowprobe-audit/pull/11/head' \
+            '+refs/pull/12/head:refs/flowprobe-audit/pull/12/head' \
+            '+refs/pull/13/head:refs/flowprobe-audit/pull/13/head' \
+            '+refs/pull/14/head:refs/flowprobe-audit/pull/14/head' \
+            '+refs/pull/15/head:refs/flowprobe-audit/pull/15/head' \
+            '+refs/pull/16/head:refs/flowprobe-audit/pull/16/head' \
+            '+refs/pull/17/head:refs/flowprobe-audit/pull/17/head' \
+            '+refs/pull/18/head:refs/flowprobe-audit/pull/18/head'
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -92,11 +105,11 @@ jobs:
             libxdo-dev \
             wget
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: 1.98.0
           components: clippy,rustfmt
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Check formatting
@@ -107,6 +120,16 @@ jobs:
         run: cargo check --workspace --locked
       - name: Test locked root Rust workspace
         run: cargo test --workspace --locked
+      - name: Document locked root Rust workspace
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --workspace --locked --no-deps
+      - name: Document locked isolated integration crate
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: >-
+          cargo doc --manifest-path tests/integration/v0_1/Cargo.toml
+          --locked --no-deps
       - name: Verify real curl for the hermetic curlrc regression
         run: curl --disable --version
       - name: Run corrected isolated v0.1 release gate
@@ -117,11 +140,11 @@ jobs:
     if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.22.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.19.0
           cache: pnpm
@@ -135,30 +158,36 @@ jobs:
         run: pnpm --dir apps/desktop build
 
   task-scope-trusted-base:
-    name: Task scope (trusted base)
-    if: github.event_name == 'pull_request_target'
+    name: ${{ github.event_name == 'pull_request_target' && 'Task scope (trusted base)' || 'Task scope (not applicable)' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Mark the trusted-base audit as not applicable
+        if: github.event_name != 'pull_request_target'
+        run: echo "Trusted-base task-scope audit is only active for pull_request_target."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request_target'
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: github.event_name == 'pull_request_target'
         with:
           python-version: '3.12'
       - name: Fetch and attest the exact pull-request head object
+        if: github.event_name == 'pull_request_target'
         shell: bash
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
+          git fetch --no-tags --no-recurse-submodules origin \
             "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/flowprobe-pr-head"
           test "$(git rev-parse refs/remotes/origin/flowprobe-pr-head)" = "$HEAD_SHA"
       - name: Enforce task scope using trusted base code and contract
+        if: github.event_name == 'pull_request_target'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
