@@ -1,0 +1,21 @@
+id = "ARCH-003"
+milestone = "v0.2"
+title = "Define local CA trust lifecycle"
+goal = "Define a consentful, least-privilege and recoverable local CA lifecycle whose private key remains outside the renderer and generic privileged helper while install and removal target only FlowProbe-owned trust state."
+depends_on = ["ARCH-001"]
+allowed_paths = ["docs/adr/0006-local-ca-trust-lifecycle.md", "docs/contracts/local-ca-lifecycle.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/0001-singbox-independent-runtime.md", "docs/adr/0002-rust-capture-core.md", "docs/adr/0003-wasm-analyzer-runtime.md", "docs/adr/0004-transactional-system-network-lifecycle.md", "docs/adr/0005-egress-and-loop-prevention.md", "docs/contracts/analyzer.wit", "docs/contracts/config-compiler.md", "docs/contracts/normalized-flow.md", "docs/contracts/runtime-control.md", "docs/contracts/storage.md", "docs/contracts/network-session-lifecycle.md", "docs/contracts/privileged-helper.md", "docs/contracts/egress-and-loop-prevention.md", "docs/development/**", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = ["python -B scripts/validate_tasks.py", "python -B scripts/check_task_scope.py check --task ARCH-003 --base-ref origin/main --head-ref HEAD", "python -B scripts/quality_gate.py", "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml", "mise run check", "git diff --check origin/main...HEAD"]
+definition_of_done = [
+    "ADR-0006 is accepted and its contract defines typed absent, generated, install-pending, installed-and-verified, remove-pending, drifted, and recovery-required states",
+    "CA key ownership, protected persistence, rotation, zeroization, certificate identity, trust-store scope, platform authority and the boundary between capture, Supervisor and helper are explicit; renderer and ordinary diagnostics never receive private-key material",
+    "Install and uninstall require explicit user intent, journal-before-mutation, exact immutable certificate identity and fingerprint checks, idempotent retry, post-operation verification, and bounded crash or helper-restart reconciliation",
+    "Trust targets are a platform-tagged union carrying DER SHA-256, exact store or domain scope, installer owner, pre-existing state and per-target verification; partial multi-store success remains explicit and cannot collapse into one installed boolean",
+    "Removal can delete only the exact FlowProbe-owned trust anchor and cannot use a broad subject match or overwrite administrator changes; external deletion, replacement and scope drift are detected and reported",
+    "CA trust is persistent state distinct from a temporary network session, so stopping TUN does not claim to uninstall trust and a network rollback does not silently mutate persistent CA intent",
+    "TLS interception is permitted only when the signing key matches the verified installed certificate; unsupported, rejected or drifted trust falls back to transparent pass-through or a typed refusal according to an explicit connectivity-first rule",
+    "The Windows, macOS and Linux matrix states user or machine store scope, required permission, browser-private-store exclusions and real install, verify, crash-recover and exact-uninstall evidence without claiming unsupported coverage",
+    "Linux trust support is reported per concrete distribution or p11-kit, system bundle and NSS database target and cannot be advertised as universal system or browser trust",
+    "No implementation, real secret, existing accepted architecture artifact, milestone claim, task contract, dependency, manifest, lockfile, or unrelated documentation changes in ARCH-003",
+    "The architecture pull request body contains exactly one unquoted Task ID: ARCH-003 line, uses an architecture-prefixed title, all machine checks pass, creates no GitHub review request or approval, and receives an independent P0-P2-zero security review",
+]

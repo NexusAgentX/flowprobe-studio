@@ -1,0 +1,28 @@
+id = "PLAN-006"
+milestone = "v0.2"
+title = "Bootstrap the v0.2 system-integration architecture"
+goal = "Authorize one mandatory no-notification governance correction and four ordered architecture tasks that resolve system-network ownership and recovery, egress and loop prevention, local CA trust, and UDP and DNS behavior before any v0.2 implementation task is created."
+depends_on = ["GOV-001", "GOV-003"]
+allowed_paths = ["specs/tasks/v0.2/PLAN-006.toml", "specs/tasks/v0.2/GOV-004.toml", "specs/tasks/v0.2/ARCH-001.toml", "specs/tasks/v0.2/ARCH-002.toml", "specs/tasks/v0.2/ARCH-003.toml", "specs/tasks/v0.2/ARCH-004.toml"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/tasks/README.md", "specs/tasks/v0.1/**", "specs/nonconformance/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task PLAN-006 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "PLAN-006, GOV-004 and ARCH-001 through ARCH-004 are the only added paths, all six are regular mode-100644 TOML files, and the trusted-base planning bootstrap accepts the combined repository task DAG",
+    "PLAN-006 depends on both the original v0.1 governance task and its no-approval correction so v0.2 cannot race the completed architecture-proof and repository-governance tails",
+    "GOV-004 depends on PLAN-006 and GOV-003, removes the CODEOWNERS source of GitHub automatic review requests while retaining every machine control, and must merge before ARCH-001 or any other downstream pull request opens",
+    "ARCH-001 owns only the shared transactional lifecycle, privileged-helper and supported-platform authority boundary; ARCH-002 owns egress and loop prevention, ARCH-003 owns persistent local CA trust, and ARCH-004 owns UDP and DNS baseline semantics",
+    "ARCH-002 and ARCH-003 depend on the shared ARCH-001 ownership model, ARCH-004 additionally depends on ARCH-002 routing semantics, and no architecture task has an overlapping allowed path",
+    "Each architecture task adds only its exact new ADR and contract paths and cannot modify ARCHITECTURE.md, ROADMAP.md, the v0.2 milestone, existing accepted ADRs, or existing contracts",
+    "The architecture tasks must use primary platform and sing-box sources to distinguish supported deployment paths from assumptions, including the macOS direct-distribution and Network Extension boundary",
+    "A later unknown PLAN-007 task, created only after all four architecture tasks merge, will bootstrap exact v0.2 implementation task contracts from the accepted architecture instead of relying on predeclared placeholder tasks or broad allowed_paths",
+    "The planning change contains no implementation, existing task edit, accepted architecture edit, milestone completion claim, workflow change, remote repository setting change, compatibility shim, migration layer, or dependency change",
+    "The planning pull request body contains exactly one unquoted Task ID: PLAN-006 line, all current-head machine checks pass, and no explicit GitHub review request or approval is created",
+    "The planning pull request records rather than hides every CODEOWNERS-generated opening-time review request observed before GOV-004 existed, removes all requested reviewers immediately, contains no submitted review, and creates no later re-request; this evidence is the defect GOV-004 must eliminate before any downstream pull request",
+    "An independent technical reviewer reports no P0-P2 issue in the bootstrap scope, dependency order, architecture coverage, evidence boundary, or downstream planning strategy",
+]
