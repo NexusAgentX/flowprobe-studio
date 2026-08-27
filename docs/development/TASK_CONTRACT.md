@@ -75,9 +75,9 @@ python -B scripts/check_task_scope.py audit \
 
 The repository governance boundary trusts current NexusAgentX organization
 owners and repository administrators. Those actors can change workflows,
-CODEOWNERS, and remote protection settings, so this mechanism does not claim
-to withstand a malicious or compromised owner or administrator. Pull-request
-code and every other actor are untrusted.
+repository policy files, and remote protection settings, so this mechanism
+does not claim to withstand a malicious or compromised owner or administrator.
+Pull-request code and every other actor are untrusted.
 
 The proposed-head and trusted-base signals are intentionally isolated:
 
@@ -104,16 +104,18 @@ and proposed-head failures.
 
 ### Post-merge remote enforcement
 
-Apply remote settings only after both workflows and CODEOWNERS are present on
-`main`. Repository files describe the desired policy; they are not evidence
-that GitHub is enforcing it.
+Apply remote settings only after both workflows are present on `main`.
+Repository files describe the desired policy; they are not evidence that
+GitHub is enforcing it.
 
-The CODEOWNERS file remains the syntax-checked ownership and trusted-actor
-inventory. It does not create a merge approval requirement. GitHub may still
-automatically request a listed owner when a pull request changes an owned path;
-FlowProbe automation and task execution do not explicitly create or re-request
-GitHub reviews. Eliminating platform-generated CODEOWNERS notifications would
-require a separate, explicitly authorized CODEOWNERS policy change.
+The repository deliberately has no `.github/CODEOWNERS` file. GitHub
+automatically requests reviews from code owners when a ready pull request
+changes owned files, and does not document a repository-level switch that keeps
+CODEOWNERS ownership annotations while disabling those requests. Trusted-actor
+inventory therefore comes from live organization-owner and
+repository-administrator APIs instead of review routing. FlowProbe automation
+and task execution must not explicitly create or re-request GitHub reviews.
+See [About code owners](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 
 Restrict Actions to read-only workflow tokens, full-SHA pins, and the five
 repositories used by the checked-in workflows:
@@ -181,8 +183,6 @@ gh api repos/NexusAgentX/flowprobe-studio/actions/permissions/selected-actions
 gh api repos/NexusAgentX/flowprobe-studio/actions/permissions/workflow
 gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
   'repos/NexusAgentX/flowprobe-studio/rules/branches/main?per_page=100' | jq 'add'
-gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-  'repos/NexusAgentX/flowprobe-studio/codeowners/errors?ref=refs%2Fheads%2Fmain'
 gh api repos/NexusAgentX/flowprobe-studio/collaborators --paginate
 ```
 
