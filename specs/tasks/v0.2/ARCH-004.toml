@@ -1,0 +1,22 @@
+id = "ARCH-004"
+milestone = "v0.2"
+title = "Define the UDP and DNS visibility baseline"
+goal = "Define bounded generic UDP metadata, pass-through and DNS visibility semantics that preserve connectivity, distinguish observed from unavailable data, and reuse the transactional and loop-prevention architecture on every supported platform."
+depends_on = ["ARCH-001", "ARCH-002"]
+allowed_paths = ["docs/adr/0007-udp-dns-baseline.md", "docs/contracts/udp-dns-baseline.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/0001-singbox-independent-runtime.md", "docs/adr/0002-rust-capture-core.md", "docs/adr/0003-wasm-analyzer-runtime.md", "docs/adr/0004-transactional-system-network-lifecycle.md", "docs/adr/0005-egress-and-loop-prevention.md", "docs/adr/0006-local-ca-trust-lifecycle.md", "docs/contracts/analyzer.wit", "docs/contracts/config-compiler.md", "docs/contracts/normalized-flow.md", "docs/contracts/runtime-control.md", "docs/contracts/storage.md", "docs/contracts/network-session-lifecycle.md", "docs/contracts/privileged-helper.md", "docs/contracts/egress-and-loop-prevention.md", "docs/contracts/local-ca-lifecycle.md", "docs/development/**", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = ["python -B scripts/validate_tasks.py", "python -B scripts/check_task_scope.py check --task ARCH-004 --base-ref origin/main --head-ref HEAD", "python -B scripts/quality_gate.py", "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml", "mise run check", "git diff --check origin/main...HEAD"]
+definition_of_done = [
+    "ADR-0007 is accepted and its contract defines a generic datagram-flow identity, original destination, direction, packet and byte counts, timing and idle closure, process provenance, bounded metadata, pass-through and explicit unavailable states without promising payload decoding or reassembly",
+    "DNS metadata defines query and response correlation, name, type, class, response code, transport, resolver, timing and truncation with privacy, retention and redaction rules",
+    "Observed, inferred, opaque and unavailable states are distinguishable, and encrypted DNS or QUIC traffic is not reported as visible DNS unless a supported decoder actually observed it",
+    "DNS capability distinguishes native-configured, port-53-hijacked, metadata-observed, encrypted-opaque and unavailable states across IPv4, IPv6, UDP, TCP, DoH, DoT and DoQ instead of collapsing routing, interception and decoding into one visibility claim",
+    "Malformed DNS, fragmentation, reordering, loss, timeout, excessive flows and resource exhaustion are bounded and fail safe without panicking or unnecessarily breaking pass-through connectivity",
+    "DNS routing, DNS visibility and DNS leak prevention are separate claims; system resolver or DNS mutations use the ARCH-001 transaction and UDP or DNS egress reuses ARCH-002 loop exclusion",
+    "When an external upstream cannot carry requested UDP, behavior is an explicit unsupported result, block, or user-authorized direct fallback and never a silent policy leak",
+    "Runtime options are verified against the exact pinned sing-box version and source contract; fields documented only by a newer release cannot be compiled into or counted as capability of the pinned runtime",
+    "The contract defines deterministic malformed-input and resource-limit tests plus real platform DNS visibility, UDP pass-through, loop, rollback and ordinary-connectivity evidence for each claimed supported host",
+    "The contract uses the existing additive normalized-flow extension model and does not modify the accepted normalized-flow contract in this task",
+    "No implementation, fixture, existing accepted architecture artifact, milestone claim, task contract, dependency, manifest, lockfile, or unrelated documentation changes in ARCH-004",
+    "The architecture pull request body contains exactly one unquoted Task ID: ARCH-004 line, uses an architecture-prefixed title, all machine checks pass, creates no GitHub review request or approval, and receives an independent P0-P2-zero review",
+]
