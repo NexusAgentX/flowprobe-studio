@@ -160,11 +160,12 @@ That produces a new plan and generation; it is not runtime fallback.
 | Materialize/delete the fixed private runtime artifact and start the independent process through the ARCH-001 gate | Network Runtime adapter |
 | Direct dial, HTTP CONNECT, TLS-to-proxy, SOCKS5 negotiation, destination transport, and runtime socket creation | Network Runtime |
 | Capture protocol streams and hand them to the versioned egress connector without knowing sing-box internals | Capture Core |
-| Discover baseline/interface state, local listeners, and capability evidence | Typed platform backend under Supervisor/helper orchestration |
+| Sign immutable, exact-tuple TLS and non-TLS capability real-host release evidence under a compile-time trusted release-key registry | Release Verifier; plan-independent and unable to sign live/runtime observations |
+| Discover baseline/interface state, local listeners, and live capability/readiness evidence | Typed platform backend under Supervisor/helper orchestration |
 | Apply, read back, lease, compensate, and recover privileged `egress.*` resources | Privileged helper authority |
 | Keep the loop gate closed on owner death, unsafe drift, boot, or suspend epoch change | Helper/watchdog fence domain |
 
-Every trust-boundary component is registered in the plan before activation,
+Every live trust-boundary component is registered in the plan before activation,
 including Renderer, policy broker, Supervisor, secret/trust brokers, Config Compiler, runtime
 adapter/runtime, Capture Core, platform backend, helper/watchdog, and each
 accepted local external proxy. Each either declares all external network paths
@@ -172,6 +173,32 @@ or supplies preventive `NoExternalNetworkPath` evidence. Proof and health are
 purposes on the component that really opens the socket, not fictional actors.
 DNS or UDP actors registered later by ARCH-004 join the same exclusion set when
 they use the selected egress.
+The Release Verifier is deliberately not a live actor: its Ed25519 identity is
+accepted only through the compile-time release-key registry and only for the
+immutable registered TLS-verifier and non-TLS capability-evidence roots (tags
+49 and 53). It cannot sign a capability
+report, runtime readiness, plan observation, TLS handshake, or health result.
+A TLS capability becomes `RealHostVerified` only when the live backend report,
+the release-signed exact OS/package/backend/adapter evidence root, the package
+manifest build identity, and the runtime handshake stack identity all
+cross-bind byte-for-byte.
+Every other `RealHostVerified` capability likewise requires a release-signed
+tag-53 root whose key, mechanism/version, backend/package/platform, covered
+scope/enforcement, implementation build, and passed real-host suite match the
+live report and package manifest exactly. Live capability, endpoint-resolution,
+local-proxy-identity, and baseline-anchor roots are instead signed by the typed
+platform backend under a helper-issued pre-plan ticket/session/generation/
+nonce/boot/suspend/channel binding before their digests enter the one-way
+candidate-plan DAG. Tag 54 is the unsigned closed isolation policy descriptor
+and binds an exact release-verified `ActorNetworkIsolation` capability report.
+An already-live networkless actor may additionally carry a pre-plan tag-55
+readback in the graph; a newly allocated actor carries only the instruction to
+start inert with tag 54 attached, never a future readback digest. Regardless of
+that initialization branch, every networkless actor must have a fresh dual-
+signed preactivation tag-55 checkpoint accepted before it executes, sends local
+IPC, emits a protocol byte, or precedes a shared OS mutation. Fresh tag-55
+postactivation/renewal readbacks are likewise jointly signed by the platform
+backend and helper and do not feed back into the sealed graph.
 
 ### Pinned sing-box mapping
 
@@ -184,7 +211,7 @@ targets only, not capability claims:
 | `Direct` | `type=direct` with an explicit accepted bind/protect policy |
 | `ExternalHttp` | `type=http`, TLS disabled, HTTP CONNECT only |
 | `ExternalHttps` | `type=http`, TLS enabled with the sealed proxy identity/trust policy, HTTP CONNECT only |
-| `ExternalSocks5` | `type=socks`, explicit `version=5`, explicit TCP/UDP network set, UDP-over-TCP disabled |
+| `ExternalSocks5` | `type=socks`, explicit `version=5`; `udp_policy=Disable` emits only `network=tcp`, while `RequireAssociate` emits only `network=tcp,udp`; UDP-over-TCP disabled |
 
 The compiler emits protected `__flowprobe_*` tags and rejects user redefinition.
 It MUST NOT use a generic detour that causes sing-box to ignore the outbound's
@@ -202,7 +229,7 @@ Its pinned Go 1.24.7 public TLS state does not expose the negotiated group or
 server-authentication signature scheme, and its defaults offer values outside
 the contract's closed ClientHello policy; it therefore cannot manufacture the
 required TLS observation from public state.
-Its SOCKS UDP path does not provide the sealed relay resolver/source/RSV/FRAG
+Its SOCKS UDP path does not provide the required literal-relay locality/source/RSV/FRAG
 checks. The current compiler/runtime and Go clients also do not prove the
 specified credential containment and zeroization lifecycle. Therefore emitting
 the table above cannot make the affected path Ready: a separate versioned,
@@ -262,7 +289,40 @@ identity sends no SNI. TLS 1.2/1.3 cipher suites, groups, certificate algorithms
 TLS 1.2 `ServerKeyExchange` signature/hash pairs, and TLS 1.3 server
 `CertificateVerify` signature schemes are closed lists; early data,
 renegotiation, and resumption are disabled in v1. A TLS 1.2 ECDSA signature pair
-does not encode or prove a certificate curve.
+does not encode or prove a certificate curve. Exactly one ClientHello is
+allowed: TLS 1.2 legacy session ID/ticket, TLS 1.3 PSK/PSK-mode/early-data, and
+all unknown extensions are absent, the complete extension order is observed,
+and a HelloRetryRequest is rejected without sending a second ClientHello.
+When a mixed TLS 1.2/1.3 offer negotiates TLS 1.2, the client also rejects both
+RFC 8446 ServerHello downgrade sentinels and records only the closed successful
+check, never the raw random value.
+When TLS 1.2 is offered the fixed cipher list ends with the empty-renegotiation
+SCSV and a successful TLS 1.2 server must acknowledge empty secure
+renegotiation. The ClientHello also carries the empty extended-master-secret
+extension, and successful TLS 1.2 requires server echo plus EMS derivation; TLS
+1.3 records both checks as not applicable.
+Passed evidence carries closed reference-identity, path, time/usage, every
+validated path-key/signature algorithm, revocation, and pin results and proves
+they correspond to the offered/negotiated ClientHello values.
+For TLS 1.2, an ECDHE_ECDSA suite accepts only an ECDSA/Ed25519 leaf and a
+matching ECDSA/Ed25519 `ServerKeyExchange`; an ECDHE_RSA suite accepts only an
+RSA leaf and matching RSA-PSS-RSAE or RSA-PKCS1 `ServerKeyExchange`. Every
+cross-family combination is rejected. TLS 1.3 cipher suites remain independent
+of authentication, with the leaf/signature relationship still checked exactly.
+The fixed TLS 1.2 supported-group image permits only P-256/P-384 ECDSA leaf
+keys; P-521 is therefore rejected in TLS 1.2 while remaining available through
+the exact P-521/SHA-512 TLS 1.3 signature scheme.
+The recorded selected anchor is the actual terminal anchor of the validated
+path and must be a member of the exact context-bound system snapshot or private
+anchor descriptor and of the exact loaded set; a substituted or filtered-out
+FlowProbe anchor cannot produce `Passed`.
+Certificate validity uses one OS UTC wall-clock sample whose corresponding
+helper-domain monotonic tick and boot/suspend epochs are carried inside the
+runtime-signed handshake root. The sample is not described as independently
+authenticated time. Every certificate in the path uses that same value, and a
+read failure, epoch mismatch, or detected wall-clock discontinuity fails closed;
+a runtime implementation unable to detect discontinuity keeps `ExternalHttps`
+unsupported.
 
 An untrusted certificate, identity mismatch, unavailable required revocation
 evidence, or TLS downgrade is a refusal. There is no opportunistic plaintext
@@ -273,10 +333,18 @@ must not cause an external proxy certificate to be accepted.
 System trust is a short-lived, revision-bound filtered snapshot, not an ambient
 runtime default. Before sealing, request-only anchor/pin handles resolve to
 non-authorizing content descriptors and expected observation schemas; the plan
-never binds a future result. After `Prepared`, the trust broker signs one
+never binds a future result. After each phase challenge exists, the trust broker
+also signs a plan/generation/context-bound effective-trust observation over the
+fresh snapshot. Preactivation binds the sealed snapshot; postactivation and
+renewal permit only a newly observed snapshot with identical security fields
+apart from its bounded time window. After `Prepared`, the trust broker signs one
 plan/node/slot/channel-bound delivery record, the Network Runtime signs the
 exact loaded state with ambient reads/reload disabled, and the Runtime Adapter
 independently signs the exact materialization and post-load artifact absence.
+The Runtime copies bounded material into private non-file-backed memory and
+proves zero remaining artifact handles and file-backed mappings before the
+adapter removes the pathname; current-state evidence repeats both zero counts,
+and adapter evidence is explicitly limited to adapter-owned handles/mappings.
 The artifact is removed before proxy TLS begins. Each proxy connection then
 produces a context-bound runtime-signed handshake root with the actual
 ClientHello policy image, server-authentication scheme, negotiated values, and
@@ -286,6 +354,11 @@ state and current artifact absence without redelivery or reload. System-root
 mode also revalidates the exact store revision and filtered anchor set. The
 plan/journal retain only registered descriptors, signed safe roots, and digests,
 never handles, raw anchors, certificates, or transcripts.
+The runtime load root repeats its authenticated external-gate channel binding
+in its signed body, and the adapter artifact root must repeat that same value.
+This load-ack/control channel is domain-separated from the broker-to-materializer
+delivery channel; signer-header, load-root, runtime, or artifact substitutions
+fail closed.
 
 The pinned sing-box 1.13.19 TLS options expose no revocation-status enforcement
 surface. `RequireFreshOcsp` is therefore explicitly unsupported in contract v1;
@@ -313,29 +386,282 @@ address returned by the sealed resolver dependency. A failed or incompatible
 choice never falls back to the other.
 
 UDP is disabled unless `udp_policy=RequireAssociate` and every required
-capability and probe succeeds. That policy uses RFC 1928 `UDP ASSOCIATE`, keeps
-the control TCP connection alive for the association, honors the returned relay
-endpoint, and supports IPv4, IPv6, and domain address types according to the
-sealed policy. v0.2 does not claim SOCKS5 UDP fragmentation: nonzero `FRAG` is
+capability and probe succeeds. That policy uses three distinct socket roles.
+Role A is the ordinary SOCKS5 TCP connection that performs method/authentication,
+one `CONNECT`, the target NonceEcho, and its required peer close. Once CONNECT
+succeeds, A is tunnel data and may never carry another SOCKS greeting or command.
+Role B is a new TCP connection to the byte-identical sealed proxy candidate. It
+starts a fresh greeting at byte zero, repeats method negotiation and the RFC
+1929 wire exchange when configured, sends the sole RFC 1928 `UDP ASSOCIATE`, and
+remains open for the association lifetime. The same exact runtime may reuse the
+credential already held in protected memory, but creates no second broker
+delivery or artifact. Role C is the UDP relay child. A/B have distinct epochs,
+tag-31 roots, platform identities, socket sequences, route observations and,
+for HostLocal, independent connected-peer proofs; their ordering is A < B < C.
+Using A as B or sending `UDP ASSOCIATE` in the CONNECT tunnel is invalid rather
+than a typed protocol failure.
+
+The policy honors B's returned relay endpoint and accepts only a public-global-
+unicast literal IPv4 or unscoped IPv6 relay. A domain-form relay is a typed
+terminal unsupported result and starts
+neither a resolver nor UDP child. v0.2 does not claim SOCKS5 UDP fragmentation: nonzero `FRAG` is
 first dropped and then makes association health fail as unsupported; it cannot
-be reported as delivered. A domain relay is resolved only through its separate
-sealed baseline resolver. The exact runtime establishes the association during
-preactivation proof and retains the control connection/relay through commit.
+be reported as delivered. The exact runtime may establish a bounded association
+during preactivation proof but must close it before the factory's one-way phase
+transition. Because v1 defines no authenticated transfer of that socket into the
+ResumeBarrier-protected phase, `RequireAssociate` remains
+`UnsupportedPendingArchitecture/PreactivationSocketPhaseTransitionUnavailable`;
+it cannot retain or silently recreate the association through commit.
 Full-tunnel UDP requires an endpoint-independent preventive socket/actor
 exclusion; a proxy-selected relay can never create an unsealed privileged route
 or rule. `Disable` rejects a request
 that requires UDP; `RequireAssociate` rejects lack or loss of the association.
 UDP-over-TCP is a different protocol and is not substituted.
 
-The request address is exact: IPv4 control uses `0.0.0.0:0`, IPv6 control uses
+The request address is exact: IPv4 role-B control uses `0.0.0.0:0`, IPv6 role-B control uses
 `[::]:0`, and neither uses a domain/destination value. Relay datagrams require
 zero RSV and FRAG before delivery. The pinned built-in SOCKS UDP client does not
 meet these relay and header rules, so `RequireAssociate` remains explicitly
 unsupported until a conforming packaged adapter exists.
 
+`RequireAssociate` also requires the sole signed probe-target authorization to
+name `NonceEcho` and explicitly authorize the additional SOCKS5 UDP canary
+transport; a TCP-only receipt is not widened implicitly. After plan sealing and
+exact A target-tunnel, B dedicated-control, and C UDP-relay child plus literal-
+relay selection, the helper generates a
+fresh association-bound nonce and distinct UDP commitment, durably appends and
+fsyncs the helper-signed one-use consumption record, and only then releases the
+nonce once to the exact runtime/channel. It is never a plan commitment and is
+never reused across TCP/UDP, phase, target, attempt, candidate, either TCP epoch
+or child, UDP child, relay, or destination. Record/fsync/delivery ambiguity,
+crash, timeout, or response loss
+fails closed without redelivery; helper cleanup remains a helper-verified fact,
+not a Network Runtime self-assertion.
+
+After A's target challenge passes and closes, B is opened by one bounded atomic
+factory operation covering queue/capacity, creation, mechanism/readback, TCP
+connect, HostLocal peer proof, signing, sequence/epoch allocation, and
+publication. A normal route semantic mismatch or connect refusal/timeout is an
+unpublished role-B protocol terminal; a factory-invariant failure publishes no
+B phase/child and uses the dedicated control-release abort. A terminal latched
+during the operation is drained: success publishes B and immediately terminates
+the zero-byte method phase, while factory failure keeps abort priority. An
+ordinary route/connect negative completion and a latched cancellation or
+deadline instead compete by gate ordinal: completion-first retains the ordinary
+unpublished role-B outcome, terminal-first retains `Cancelled`/`TimedOut` on
+the active role-B phase, and neither ordering publishes B, retries, or permits a
+later event to overwrite the winner. If the
+one-shot first-byte guard fails after B publication, a separate guard-abort
+binds B, emits zero greeting/authentication/ASSOCIATE bytes, closes B, and keeps
+A+B in the permanent creation chain. None of these prefixes retries or changes
+candidate after A has consumed the authorized target challenge.
+
+UDP-child creation and guarded release occur after literal-relay classification
+and before the canary-send phase. If any factory-local creation, mechanism,
+readback, latch, signing, queue-append, sequence, or release invariant fails
+before that child is released, tag 50 records the dedicated pre-send abort with
+zero nonce/tag-48/datagram material. The attempt's first fresh socket
+checkpoint carries the exact `TerminalFailed` latch that uniquely projects the
+outer `SocketFactoryInvariantUnproven` failure. Because that factory defect is
+the first defect, the cleanup checkpoint must carry the actual residual state
+with both censuses Complete and equal; a simultaneous or later negative census
+cannot independently replace or wrap the creation failure. If actual state
+cannot be proved, no tag-50 or outer wrapper is valid. The runtime
+cannot relabel it as a relay or canary protocol failure, retry, or consume
+another privileged permit.
+Positive relay classification remains pending until the serialized event gate
+can atomically commit the passed classification together with either the exact
+factory release result or its typed terminal failure. Cancellation, deadline,
+or control loss before the full bounded factory operation starts leaves the
+relay unselected and the UDP child unpublished. Once that operation has
+started, a later terminal event is instead latched without allowing nonce or
+payload bytes while the operation drains. A successful drain publishes the
+child and projects that latch as the immediate send-phase terminal; a factory-
+step failure owns the higher-priority typed pre-send abort. Unprovable drain or
+cleanup invalidates the wrapper, and there is no signed gap after a passed
+classification.
+If C publication succeeds but its one-shot first-datagram guard fails, C remains
+in the signed chain, the already-durable tag-48/constructed request is retained
+with zero datagrams and no response, and the tag-46 factory failure outranks the
+nested canary failure. A pre-publication abort may never hide that released C.
+
+The synthetic request and response each carry the fixed 40-byte FPEG v1
+NonceEcho payload inside one exact RFC 1928 UDP envelope. IPv4, IPv6, and domain
+destination datagrams are exactly 50, 62, and `47 + name_length` bytes. Passed
+tag-50 evidence signs the sole target, attempt, family tuple, candidate,
+role-A target-tunnel epoch/child, role-B dedicated-control epoch/child, role-C
+UDP child, first-following socket census, literal relay, exact authorized
+destination, B control-exchange frame digests, fresh
+commitment/consumption record, whole request/response datagram digests, exact
+relay source, zero RSV/FRAG, and byte counts. A wrong source, destination,
+envelope, or echo nonce/type/length selects one closed typed negative result.
+Even a valid consumed echo remains a pending validation result until one final
+zero-network gate operation atomically rechecks control/association liveness,
+commits both validation and `AssociationReady`, and freezes an immutable
+terminal snapshot. A terminal event whose ordinal wins retains the echo evidence
+and terminates validation. The winning positive snapshot is not yet the signed
+root. A was already closed by the target challenge. Preactivation then closes B
+and C so all three roots are chain-present/current-absent; postactivation and
+renewal retain this attempt's B and C, leaving its A chain-present/current-
+absent. The factory-wide current-open set at a later active-group checkpoint
+also retains the B+C pair from every earlier successful group. In quiescent
+postactivation that verification projection is the whole set; at renewal it is
+disjoint from, and added to, every unrelated live child of the same actor-wide
+factory reported by the exact dual census. Any non-success attempt, including one in the first group, controlled-
+closes its published children and every B+C pair retained by an earlier group in
+the same verification sequence before the terminal attempt's first-following
+checkpoint. The cumulative chain remains, but an ordinary negative, timeout, or
+cancellation contributes no verification child current-open; unrelated renewal
+children remain governed by the same lifecycle/census rules. Required closes
+run one child at a time in decreasing socket-sequence order, so C precedes B in
+each retained pair. A close failure identifies the first child and whether its
+request failed or bounded completion was unproven; cleanup failure instead lets
+the factory/census negative take priority when the actual residual state is
+authenticated; only unprovable cleanup state yields no valid outer root. The exact
+context-required first-following tag-34 census is produced before tag 50 is
+signed.
+
+These A/B/C children are verification-only and are never promoted into the
+generic UDP data plane. Preactivation closes every published child as part of
+the attempt; tag 13's final clean attempt checkpoint is also its sequence-
+finalization root. For tag 28 or 29, a failed/timed-out/cancelled protocol
+attempt closes its own children and every retained prior B+C pair before that
+attempt's first-following checkpoint, so no extra success-side root is added.
+After a clean protocol-successful final attempt, however, the traversal and
+tag-51/tag-52 predicates are frozen first. Both a positive result and every
+structurally valid predicate-negative result then require one later fresh
+`Empty` tag-34 finalization checkpoint. `RequireAssociate` marks every retained
+B+C pair cleanup-owned and closes it there; other selections create no socket
+but still execute the fresh dual census. The checkpoint preserves the
+cumulative chain, proves no verification child current-open, and is the probe
+factory's top-level outer root. At renewal it retains the exact unrelated
+operational set, less only independently serialized ordinary closes; it never
+assumes the actor-wide factory itself is empty. A provable close/bookkeeping/
+census failure takes priority as a dual-signed factory negative. Failure to
+construct, authenticate, or sign the required finalization or outer root yields
+no valid wrapper. The next renewal can never inherit a prior verification pair;
+operational UDP associations remain a separate ARCH-004 responsibility.
+
+Later loss is durably queued under the same plan-generation acceptance-event
+order as outer publication, commit/renewal disposition, factory release, and
+completion. Every tag-13 negative has no Open release. A passed tag 13 alone
+authorizes one clean tag-34 transition from `FinalizedHeld` to
+`Open(VerificationOnly)` for its probe factory; it still cannot authorize an
+Ordinary socket. Tags 28 and 29 instead carry factory-ID-ordered predecessor
+checkpoints for every applicable actor-wide factory and hold every creation gate.
+The probe member proposes `FinalizedHeld -> Open(OrdinaryAndVerification)`;
+tag-28 non-probe members propose the sole VerificationOnly scope upgrade, while
+tag-29 non-probe members propose only a same-scope authority refresh. A completed
+pre-lock ordinary close changes only the factory-local ledger, counter, and
+provenance until its release member first dual-authenticates it; it does not
+append an independent helper record or advance the disposition tip. An
+unresolved close, an independent post-receipt helper append, or a terminal before
+completion aborts and fences.
+
+The release authority is a target closed
+`FactoryAdmissionReleaseCurrentIndexV1` extension of the installation's sole
+ARCH-001 protected index—not a sidecar, second slot set, or second selector. A
+pristine installation has `Unset { index_epoch=0 }` only once. A future
+registered extension of `PreparePlan` must bind `Unset`, or a fully closed
+prior-generation `GenerationClosed`, to non-authorizing `BoundClosed` with the
+next epoch and exact plan, generation, complete factory list, and parent journal
+tip. Tag 13 leaves it unchanged. The durable tag-28 commit result must change
+`BoundClosed` to non-authorizing `ReleasePending(Postactivation)`; the durable
+tag-29 `LeaseRenewed` result must change the exact old `Committed` to
+non-authorizing `ReleasePending(Renewal)`. Each pending value fixes one batch ID,
+the exact outer/ordinals/receipt, disposition tip, suspend-aware observation
+time and earliest deadline; Renewal also fixes the prior tag-56 digest and its
+paired batch tip. Old tag 56 loses authority as soon as pending is selected.
+Only the complete matching tag-56 batch changes pending to `Committed`.
+Preparation rollback, stop finalization, fence/recovery, or generation
+retirement changes `BoundClosed`, `ReleasePending`, or `Committed` to
+`GenerationClosed` only with the core barrier closed and actors stopped/revoked;
+a new generation binds only from that selected closed state.
+
+The current accepted ARCH-001 contract has neither these composite transitions
+nor a typed authenticated proof query that can return the current extension and
+bounded tag-56 record proof to both Supervisor and guards. Its closed `Status`
+returns only the safe summary and common head/revision, and callers may not read
+the protected journal/index directly or invent an extension field, cache,
+sidecar, or second selector. Therefore every current profile remains
+`UnsupportedPendingArchitecture` with both
+`DurableAdmissionReleaseCommitUnavailable` and
+`AdmissionReleaseProofReadUnavailable`. A separate ARCH-001 architecture task
+must register the state transitions, authorization/idempotency/recovery, and
+proof-read request/result/reconnect rules. The model here constrains that future
+work; it does not authorize an ARCH-002 implementation to bypass the frozen
+helper boundary.
+
+In that target model, a release batch consumes the exact selected pending
+disposition tip as its CAS base, stages every factory-ID-ordered tag-34 member
+and the helper/watchdog-signed tag-56 completion, and advances one transaction-
+local head/revision per record. The helper persists the vector and inactive slot
+of the one copy-on-write composite index, then uses its sole durable selector.
+Until that selector, `ReleasePending` remains authoritative and neither the old
+release nor candidates authorize a child. Selector commit publishes the entire
+vector, changes pending to `Committed`, and advances the outer revision to
+`R + member_count + 1`; there is no partial prefix or per-factory
+acknowledgement. A pre-selector crash or batch failure is unresumable: candidate
+tails are ignored/quarantined and pending fences through cleanup to
+`GenerationClosed`, without a replacement batch ID. A post-selector crash reads
+the whole new value or fences; no request replay repeats an index transition.
+
+The coordinator holds the acceptance-event gate and every factory lock while it
+reserves tag-56 time/ordinal, signs, persists, and checks an uncached helper
+clock immediately before selector write. After durable selector acknowledgement
+it checks that clock again before any return, product acceptance, or guard
+release. Crossing any bound keeps the gates closed and fences the historical
+Committed value. Even after a successful post-check, the same gate is atomically
+handed to the health/fence consumer, which drains every terminal ordered after
+completion but before handoff. A nonempty drain fences without opening; only an
+empty drain releases all factory locks and the global gate. Every later Ordinary
+publication acquires that exact gate, drains earlier events, and revalidates
+proof/freshness before its atomic child publication, so terminal-first blocks
+the child and admission-first makes the terminal the next health event. There is
+no unowned selector-to-first-byte interval. A missing proof query, stale census,
+unprovable cleanup, undrained event, clock failure, or signing timeout yields no
+Active/healthy acceptance or Ordinary release.
+
+Replay, a second datagram, or cross-context substitution instead invalidates the
+evidence and forces the enclosing transaction to fail closed; it cannot be
+converted into a valid outer `Failed` or generic success.
+
 ARCH-004 owns generic datagram identity, DNS routing and visibility, and
 detailed UDP/DNS policy. It must reuse this selection and exclusion contract;
 it cannot weaken the no-leak rule.
+
+The compiler counts A and B as independent occurrences under the same 60-second
+overall and 256-KiB protocol ceilings: B repeats connect, method negotiation and
+wire authentication without resetting either budget. C's full child-factory
+operation through the final association-ready gate—and, for the last successful
+active group, through the close-only checkpoint—is one additional
+`target_challenge` occurrence under that same overall deadline and does not
+reset between its steps. The compiler also sums both-direction maximum
+conforming bytes for every legal A+B+C decision-tree path, including both TCP
+sessions and the full UDP envelopes; insufficient normal-path capacity rejects
+sealing, while hostile over-bound input uses only the phase's closed failure.
+Socket planning likewise counts three new children for every reached
+association attempt, the exact in-sequence peak of retained B+C pairs across
+required family groups, and the complete serial-tree new-child total. Static
+sealing rejects a policy whose configured maxima cannot fit that tree even from
+an otherwise empty factory. Live occupancy is resolved separately: before every
+verification sequence and before any attempt child or protocol byte, one
+sequence-scoped admission transaction drains any earlier Ordinary operation,
+takes complete/equal factory and independent OS censuses, and requests an exact
+reservation for the current actor-wide open count plus incremental peak and the
+current lease-new count plus complete-tree total. Existing non-verification
+children and earlier lease-epoch creations count. A fitting request transitions
+`Open -> Exclusive(Running)` and reserves one contiguous child-sequence interval;
+a dynamic open or cumulative limit failure transitions directly to a typed
+terminal admission root, with open-limit priority when both fail. New Ordinary
+creation is held while Exclusive; existing sockets may continue and close, with
+every close serialized into the next checkpoint. Reserved A/B/C children alone
+consume the reservation in exact role/order, so an ordinary close cannot lend
+capacity and no limit can first be discovered after A sends bytes. Finalization
+consumes no further reservation; only the later authorized Open release returns
+the unused suffix, and it allocates no skipped sequence. Successful
+cleanup leaves no verification child current-open for the next sequence while
+preserving all historical chain roots.
 
 ## IPv4, IPv6, DNS, and time bounds
 
@@ -349,6 +675,16 @@ destination is `ProxyOpaque` and cannot satisfy a client-enforced family claim.
 Future per-flow results are observed under a sealed resolver policy rather than
 invented in the activation plan.
 
+V1 seals exactly one probe target and executes its derived connector/destination
+family tuples and candidate pairs serially. A later attempt is permitted only
+after the prior socket is closed and a fresh complete/equal factory-versus-OS
+census checkpoint is accepted. Only an early bounded connect timeout,
+`ConnectionRefused`, `NetworkUnreachable`, or `HostUnreachable`, before any TLS,
+authentication, credential, challenge, or other application-protocol byte, may
+retry the same candidate or advance the sealed candidate sequence. A mechanism,
+route/read-back, connected-local-peer, release-guard, queue, signing, or
+sequence failure is fail-closed and cannot be converted into candidate fallback.
+
 The proxy endpoint and probe targets are normalized as host plus port, with
 literal IPv6 scoped where required. Endpoint resolution records the resolver
 dependency, normalized result set, TTL/expiry or equivalent freshness limit,
@@ -360,18 +696,21 @@ Every connect, TLS, authentication, CONNECT/SOCKS negotiation, target challenge,
 and total proof has a positive finite deadline. Counts and byte limits are also
 finite: resolver candidates, HTTP head, TLS chain, OCSP material, target data,
 per-connection work, and aggregate proof bytes all have contract caps. No API
-accepts an infinite timeout. Timeout results identify only the bounded phase,
-family, endpoint digest, and reason code.
+accepts an infinite timeout. `TimedOut` is itself the closed reason variant; its
+bounded phase is inline, while family and endpoint digest come from the
+enclosing attempt. It is never encoded as `Failed { error_code=TimedOut }`.
 
 ## Pre-activation proof of the actual selection
 
 Configuration parsing and process startup are necessary but insufficient.
 During ARCH-001 `Preflighting`, the Supervisor uses the read-only preparation
 ticket only to validate and place a bounded `EgressProofSpecification` plus its
-expected observation in the candidate graph. It starts no internal service and
-does not claim the result already exists. After the helper seals the exact plan,
-the runtime adapter uses the ARCH-001 external gate to start the exact sing-box
-instance inert. That same authenticated runtime then executes
+expected observation in the candidate graph. It starts no new session-scoped
+Network Runtime, Capture Core, or data-plane service; already-running helper,
+broker, and discovery components may perform only their typed preflight work,
+and the Supervisor does not claim the future proof result already exists. After
+the helper seals the exact plan, the runtime adapter uses the ARCH-001 external
+gate to start the exact sing-box instance inert. That same authenticated runtime then executes
 `EgressPathProof` before any FlowProbe route, DNS, firewall, TUN, or other shared
 OS-network mutation. The result is Ed25519-signed under the runtime key bound by
 the ARCH-001 gate, using the contract's root-tag/version/role signing domain. It
@@ -384,16 +723,19 @@ The proof:
 
 1. binds to the discovered baseline egress anchor or uses an equivalent
    accepted protect mechanism;
-2. proves from the sealed actor-wide socket-factory invariant, its first child
-   observation, and route/interface evidence
-   that adding the exact later FlowProbe TUN/steering cannot recapture the
-   socket; merely running before those routes exist is not proof;
+2. proves every serial connection attempt from the sealed actor-wide socket-
+   factory invariant, that attempt's exact child observation when a connector
+   was released, its first-following accumulator and complete factory/OS census,
+   and route/interface evidence; a pre-connector-release `BeforeConnector`
+   attempt has no connector child but still
+   requires its fresh cleanup census, and merely running before later FlowProbe
+   TUN/steering exists is not proof against recapture;
 3. resolves the proxy endpoint and target only through sealed resolver
    dependencies;
 4. executes the selected direct, HTTP CONNECT, HTTPS-plus-CONNECT, or SOCKS5
    handshake rather than only validating JSON;
-5. reaches one or more explicitly configured probe targets and completes a
-   bounded protocol challenge where that target profile requires it;
+5. reaches the exactly one explicitly configured v1 probe target and completes
+   its bounded protocol challenge for every required family-success group;
 6. records the selected connector tag, family, endpoint/target digests,
    baseline anchor, applied bypass mechanism, route observation, timing, and
    typed outcome; and
@@ -410,12 +752,38 @@ target capable of proving the requested selection exists, the result is
 
 The target receipt signs a receipt-free target authorization scope bound to the
 preparation ticket, session, generation, and policy-broker context; the helper
-consumes it for one candidate plan with exact idempotent replay only. `NonceEcho`
-uses the fixed 40-byte v1 frame and a helper-generated 32-byte target nonce. Only
-the plan/target-bound commitment and result digest are durable; the raw target
-nonce is delivered once in the sole authenticated plan/runtime/channel/target/
-commitment-bound transient frame and then zeroized. It is never redelivered on
-response loss or carried by any other IPC.
+consumes it for one candidate plan with exact idempotent replay only. V1 rejects
+multiple targets or concurrent attempts pending a separate aggregation contract.
+`NonceEcho` uses the fixed 40-byte v1 frame and a helper-generated 32-byte target
+nonce. Preactivation seals a distinct commitment for every target-family tuple;
+the commitment binds the preparation ticket/session/generation, helper nonce,
+target, and tuple and is then sealed into the final plan. The selected attempt,
+candidate, connection epoch, and child are bound later by its consumption record
+and registered challenge-result root. Only the commitment, helper-signed
+consumption record, and registered challenge-result root/digest are durable. The record carries a fresh delivery ID and
+`ConsumedBeforeWrite` but never the raw nonce. It is journaled and fsynced before
+the raw target nonce leaves the helper. The nonce is delivered once per exact
+closed phase context in its authenticated plan/runtime/channel/target/tuple/
+attempt/candidate/connection/child/commitment/record-bound transient frame and
+then zeroized. That frame is the only raw-nonce IPC representation, and it is
+never redelivered on response loss or after an ambiguous/crashed write.
+Postactivation and every renewal receive a different fresh nonce after their
+phase context and exact socket child exist. The helper durably consumes delivery
+before sending its first nonce byte. The preactivation commitment deliberately
+does not hash the not-yet-computable final plan digest; its one-way inclusion in
+that final plan prevents a digest cycle, while the later record/result bind the
+final plan and exact attempt.
+Postactivation/renewal commitments additionally bind the phase context and
+child. Every signed phase result binds the first-following helper/watchdog
+accumulator. A partial write or lost
+acknowledgement never permits redelivery. V1 probe challenges are only
+`TcpConnect` and `NonceEcho`; target TLS probing remains
+`UnsupportedPendingArchitecture` pending a separate closed contract.
+Every deterministic failed challenge uses the single signed code
+`ProbeFailed`; timeout and cancellation remain their own outcome classes.
+`ProbePathUnproven` is reserved for the fail-closed orchestration case in which
+no valid signed path result exists and never appears inside a runtime phase or
+probe outcome.
 
 Proof sockets, endpoint DNS, certificate-status traffic when policy requires
 it, and challenge traffic are themselves required loop-excluded paths. Probe
@@ -426,10 +794,13 @@ or plan change.
 
 ## Separate capability dimensions
 
-Process attribution, local-listener ownership detection, and loop exclusion are
-three distinct capabilities. A platform can observe a PID without being able to
-prove listener ownership, and it can prove ownership without having an
-enforceable bypass. No capability is inferred from another.
+Process attribution, local-listener ownership detection, loop exclusion,
+physical-path binding, socket-creation enforcement, and independent full socket
+census are distinct capabilities. A platform can observe a PID without proving
+listener ownership, prove ownership without an enforceable bypass, bind one
+factory socket without proving every actor entrypoint is constrained, or inspect
+the installed policy without completely enumerating the live socket scope. No
+capability is inferred from another.
 
 Every capability report contains:
 
@@ -447,7 +818,9 @@ Every capability report contains:
 
 `Supported` as a release activation disposition requires
 `SupportedByDesign`, `Ready`, and `RealHostVerified` for the exact packaged
-platform/mode matrix. `Detective` evidence alone cannot authorize full-tunnel
+platform/mode matrix. Socket-creation and path-binding reports must be
+`Preventive`; the independent census report is intentionally `Detective` and is
+mandatory in addition to them. Detective evidence alone cannot authorize full-tunnel
 activation. Service, helper, or runtime restart is availability evidence only;
 it cannot establish exclusion, listener ownership, journal recovery, or path
 readiness.
@@ -459,11 +832,13 @@ loopback, currently assigned to this host in the relevant namespace/
 compartment, or delivered by the OS's explicit host-local route class. An
 ordinary on-link route, private address, same-LAN host, VPN peer, or gateway is
 `Remote`, not local. A backend with no reliable host-local/on-link distinction
-reports `Ambiguous`; it cannot invent an open-ended platform-local class. A
-hostname whose fresh candidate set contains a
-local address is treated as local for every candidate that may be dialed. Mixed
-local/remote results cannot race freely; the exact selected address is pinned in
-the plan and revalidated before use.
+reports `Ambiguous`; it cannot invent an open-ended platform-local class. V1
+accepts `HostLocal` only for a literal proxy endpoint represented by exactly one
+`LiteralNoResolution` candidate. A DNS proxy candidate set containing any
+`HostLocal` address, or mixing `HostLocal` and `Remote`, is
+`UnsupportedPendingArchitecture/LocalProxyCandidateIdentityMapUnavailable`;
+multi-candidate DNS proxy plans are eligible only when every candidate is
+`Remote`. The exact selected address is pinned and revalidated before use.
 
 A local endpoint requires `LocalProxyIdentity`. A PID, process name, executable
 path string, listener port, socket inode, service name, package name, or one
@@ -479,7 +854,8 @@ table snapshot is never sufficient alone. The identity binds:
 - the policy identity used by the exclusion mechanism, such as an application
   identifier or controlled cgroup identity;
 - endpoint-resolution and route epochs; and
-- an observation digest and short expiry.
+- a complete typed platform-backend signature and short expiry, with no opaque
+  listener, process, route, or evidence digest.
 
 Discovery is followed by revalidation while holding the same helper/session
 serialization boundary used to seal the plan. Immediately before the first
@@ -491,15 +867,21 @@ handle, or ambiguous multiple owner is `ListenerIdentityChanged` or
 `ListenerOwnerAmbiguous` and fails before commit.
 
 Every connection or reconnection adds a second race-closure point after
-`connect` and before any plaintext SOCKS/CONNECT or credential byte. A bounded
-TLS handshake may precede it only as part of a sealed private-anchor/AND-pin
-cooperative attestation bound to the same process and exclusion-policy identity;
-ordinary HTTPS identity alone is insufficient. The socket factory otherwise
+`connect` and before any TLS, SOCKS, CONNECT, application, or credential byte.
+V1 accepts only kernel-established-connection owner evidence. In-band TLS-first attestation is
+`UnsupportedPendingArchitecture/ConnectedLocalPeerPreTlsAttestationUnavailable`;
+out-of-band cooperation is also unsupported because no fresh socket-bound
+attestation root/key/domain is registered. Supporting cooperation needs a
+future accepted socket-bound contract and, for in-band TLS, a two-stage pre-TLS
+permit and application-byte release contract. Ordinary HTTPS identity alone is insufficient. The socket factory
 holds the socket in a no-send state while the backend binds the
 established kernel peer to the sealed listener/process/executable/policy
-identity. A fresh signed `ConnectedLocalPeerObservation` releases it. A platform
-without established-peer ownership or accepted cryptographic/cooperative
-attestation must refuse the local path; a pre-connect port/PID recheck is not a
+identity. A fresh signed `ConnectedLocalPeerObservation` carries the exact
+kernel query mechanism/scope, established connection identity, unique retained
+owner, listener, namespace, executable/platform identity, policy identity, and
+observation time inline; no unregistered owner hash can release the socket. A platform
+without kernel-established-connection ownership must refuse the local path; a
+pre-connect port/PID recheck is not a
 substitute.
 
 Remote proxy endpoints do not require a local process identity, but they still
@@ -516,7 +898,12 @@ set is:
 
 - the Renderer, trusted policy broker, Supervisor, secret/trust brokers, Config Compiler,
   runtime adapter, and typed platform backend, each with every path or
-  preventive `NoExternalNetworkPath` evidence;
+  preventive `NoExternalNetworkPath` reference to an unsigned tag-54 actor-
+  network-isolation policy plus either an existing signed pre-plan tag-55
+  complete readback or an explicit start-inert initialization branch, followed
+  in both cases by a fresh dual-signed preactivation tag-55 checkpoint before
+  actor execution/IPC/first byte/shared mutation, with complete denied external
+  capabilities and bounded allowed local IPC;
 - all Network Runtime direct, proxy-control, tunnel, DNS, and UDP sockets used
   by the selection;
 - every Capture Core egress connector socket;
@@ -526,6 +913,18 @@ set is:
   the actual actor that opens it; and
 - every selected local external proxy process and its TCP/UDP/DNS paths.
 
+For a `HostLocal` selection the graph and both exclusion roots carry the exact
+`LocalProxyIdentity` digest and contain exactly one matching
+`ExternalLocalProxy` actor; its applicable TCP, UDP, and DNS declarations are
+complete under dedicated upstream path purposes. Direct selections and remote
+external-proxy selections omit both the digest and actor. Identity or locality
+is never inferred from absence.
+Because an independently owned local proxy may reach arbitrary upstreams, its
+entries use a dedicated all-external-endpoints scope bound to that identity and
+preventively cover every external-network-capable socket of its complete stable
+worker set. Selected-endpoint enumeration, an extra worker, unsupported
+family/transport, or process ownership/compensation by FlowProbe is invalid.
+
 Each entry must bypass the captured path through the sealed baseline egress
 anchor using explicit per-socket interface binding, an owned route mark and
 policy rule, an OS protect operation, an enforceable process/cgroup/application
@@ -533,17 +932,62 @@ identity rule, or another platform mechanism with equivalent preventive and
 read-back guarantees. A route observation or process attribution event without
 preventive enforcement is `Detective`, not sufficient.
 
+Actor identities are closed inline values: owned components repeat their exact
+component/runtime instances, while the sole local-external-proxy variant names
+the registered `LocalProxyIdentity` root. Exclusion entries resolve identity
+through the actor graph rather than carrying a second arbitrary identity hash.
+Endpoint resolution carries its complete bounded alias chain and per-candidate
+route/locality facts inline; baseline and local identity roots do the same and
+are pre-plan signed. The contract's schema inventory rejects every digest field
+that does not resolve to a registered root, an exact ARCH-001 field/domain, or
+an explicitly defined content-byte hash.
+
 FlowProbe installs the runtime's actor-wide socket-factory policy once through
-one ARCH-001 external permit. Every later socket is ordinary bounded runtime
-behavior under that invariant, gets a gap-free sequence and signed child
-observation before first protocol bytes, and is synchronously enqueued on the
-pre-sealed bounded local observation channel before release. Queue loss, full,
+one ARCH-001 external permit. The sealed proof specification binds the exact
+actor graph, probe Network Runtime actor, runtime instance, component, and probe
+factory policy ID. Tag 13, tag 28, and tag 29 project that same tuple; their
+NetworkRuntime signatures use its exact `ExternalExecutorGate`, and every
+sequence tag-15/tag-31/tag-34 root belongs to that factory and epoch. Another
+valid runtime, actor, component, factory, or plan-component signer channel is
+not substitutable.
+
+Every later socket is exactly an `Ordinary` bounded data-plane operation or a
+`Reserved` verification operation under the installed invariant. Both get one
+gap-free sequence and signed child observation before first protocol bytes and
+are synchronously enqueued on the pre-sealed bounded append-only multi-reader
+observation channel before release. Ordinary creation requires an effective
+`Open(OrdinaryAndVerification)` authority plus the current complete tag-56
+shared-index batch. Reserved creation instead requires the byte-identical
+authenticated `Exclusive(Running)` sequence reservation, contiguous reserved
+ordinal, and exact A/B/C role. `FinalizedHeld`, `TerminalHeld`,
+`VerificationOnly` for Ordinary use, a staged batch member, or a stale index
+releases nothing.
+The plan carries separate release-verified capability reports for socket-
+creation enforcement, full OS census, and each physical-path mechanism. The
+policy and installation root carry the complete factory build identity,
+preventive socket-entrypoint policy, policy-root digest, alternate-path census,
+release-guard state, and census-barrier state as closed fields rather than
+opaque evidence/readback hashes. `SO_MARK` embeds the complete pre-existing
+rule priority/table/higher-priority set/resulting baseline route expectation;
+every child and checkpoint re-reads that exact tuple.
+Helper and watchdog have independent cursors and both receive every child;
+capacity follows the slower cursor, and neither performs a per-child release
+decision. Preactivation children bind the redeemed external gate, sealed
+factory, while the helper independently proves from its journal that no shared
+steering intent/resource exists. Before steering, all preactivation sockets are
+closed and a factory/OS census proves none remain; an irreversible factory latch
+then binds the closed ARCH-001 `ResumeBarrier`. The latch counter increments for
+every accepted lease/fence tuple and protected children bind the current open
+barrier read-back. Cross-phase socket reuse is unsupported. Socket creation
+limits are cumulative within a lease epoch. Queue loss, full,
 timeout, or any bind/read-back failure closes the no-send socket, terminally
-fails the factory epoch, and sends zero protocol or credential bytes. Helper and
-watchdog do not make a per-child release decision and no child reuses the
-consumed permit. At proof, pre-commit, and renewal checkpoints the factory and
+fails the factory epoch, and sends zero protocol or credential bytes. No child
+reuses the consumed permit. At proof, pre-commit, and renewal checkpoints the factory and
 platform backend independently construct the same canonical open-socket set
-under one helper challenge and linearization barrier. The platform receives no
+under one helper challenge and linearization barrier. Factory, platform backend,
+and helper co-sign the installed policy observation; every later platform census
+also freshly re-reads the exact enforcement instance and complete alternate-
+entrypoint surface. The platform receives no
 expected digest/list; equal signed roots, stable lifecycle counters, exact child
 provenance, and the gap-free accumulator are all mandatory. Missing/duplicate
 sequences, alternate raw dialers, an unmatched OS socket, factory restart, or
@@ -620,26 +1064,36 @@ The sealed plan binds at least:
 
 - requested `NetworkScope` and exact `EgressSelection` digest;
 - secret-reference, signed receipt-free risk/target authorization scopes and
-  receipts, TLS policy/effective-trust/material descriptors, and expected
-  delivery/load/artifact/handshake schemas, signer roles, and freshness
+  receipts, TLS policy/effective-trust/material descriptors, exact live TLS
+  capability report plus release-signed real-host evidence/build identity,
+  non-TLS capability reports plus their tag-53 release roots when
+  `RealHostVerified`, and expected
+  delivery/effective-trust-observation/load/artifact/handshake schemas, signer roles, and freshness
   predicates, never future observation digests, secret values, or raw anchors;
 - runtime package/build, exact runtime instance, secret-free config template,
   derived private-artifact identity/cleanup predicate, endpoint, resolver,
   probe-target, baseline-anchor, and interface/route epoch digests;
-- capability snapshot and platform/package/backend versions;
-- local proxy identity when required;
-- complete actor graph and `EgressExclusionSet` digest;
+- pre-plan-signed capability snapshot, endpoint resolution, baseline anchor,
+  local proxy identity when required, and platform/package/backend versions;
+- complete actor graph, each referenced tag-54 isolation policy/release-
+  verified capability report, any `ExistingPreplanReadback` tag-55 root, every
+  `StartInertThenPreactivationReadback` declaration, and the expected mandatory
+  dual-signed preactivation tag-55 checkpoint schema, and
+  `EgressExclusionSet` digest;
 - socket-factory implementation/enforcement identity, bounds, epoch, sequence,
   child-observation accumulator, and OS-census predicates;
-- preactivation proof specification, helper nonce slot, expected observation
-  schema, and result freshness bound, never a future result;
+- preactivation proof specification, helper nonce slot, the complete bounded
+  expected observation schema/role/freshness list, and result freshness bound,
+  never a future result or an opaque schema-table hash;
 - typed `egress.*` resource graph, apply/read-back/compensation predicates; and
 - mandatory sustained-health predicates.
 
 After `Prepared`, the trust broker, Runtime Adapter, Network Runtime, socket
 factory, and platform backend produce the applicable delivery, load, artifact-
-absence, TLS-handshake, child, accumulator, factory-census, OS-census, and path-
-proof roots under the pre-sealed schemas. The exact runtime starts inert through
+absence, effective-trust-observation, TLS-handshake, child, accumulator,
+SOCKS association, exclusion-readback, ordinary-connectivity, factory-census,
+OS-census, path-proof, Nonce consumption, and phase-bound challenge roots under the
+pre-sealed schemas. The exact runtime starts inert through
 its ARCH-001 permit and returns a helper-nonce/controller/channel/runtime-bound
 result. The helper independently checks safety-critical OS state and durably
 records the signed roots as terminal outcomes of their already sealed
@@ -688,20 +1142,34 @@ Health is an active bounded observation, not process liveness. It covers:
 - each factory's gap-free child accumulator plus challenge/barrier-bound,
   counter-stable, independently signed factory and full OS socket censuses;
 - for HTTPS proxying, fresh context-bound runtime trust-state, adapter artifact-
-  absence, and handshake roots, plus an unchanged freshly observed filtered
-  system-store snapshot when that trust mode is selected;
-- SOCKS5 control/UDP association when selected; and
+  absence, and handshake roots, plus a TrustMaterialBroker-signed context-bound
+  observation of an unchanged freshly observed filtered system-store snapshot
+  when that trust mode is selected;
+- a NetworkRuntime-signed phase-bound target result tying the authorized target,
+  current canary/renewal nonce, exact connector child, and following
+  helper/watchdog accumulator together;
+- the distinct SOCKS5 A target-tunnel history plus the immutable tag-50 snapshot
+  that observed live B control/C UDP association when selected, followed by the
+  mandatory close-only census with no verification child and an exact unchanged-
+  or-ordinarily-closed unrelated operational set; and
 - baseline-relative ordinary connectivity according to ADR-0004.
 
 An interface/default-route change immediately invalidates old route and probe
 evidence. The data-plane gate closes or remains closed while a new preparation
 is evaluated; the old plan is never edited in place. Listener replacement,
 executable or policy identity change, missing exclusion, proxy TLS identity
-change, lost SOCKS5 UDP association, or any possible recursion denies lease
-renewal and triggers fenced rollback. A transient probe failure may use a
-bounded, plan-defined consecutive-failure or elapsed-time threshold only while
-the preventive exclusion remains proven and ordinary connectivity is safe.
-Crossing the threshold is irreversible for the old lease.
+change, uncommanded SOCKS5 UDP association loss before the winning terminal/
+teardown gate position, or any possible recursion denies lease renewal and
+triggers fenced rollback. The protocol-required A close and the controlled B/C
+verification teardown after their respective winning gate positions are not
+association loss. V1 defines no tolerated-transient renewal disposition: any
+tag-29 `Failed`, `TimedOut`, or `Cancelled` result denies renewal and fences the
+old lease even when preventive exclusion and ordinary connectivity remain
+proven. A plan requesting consecutive-failure or elapsed-time tolerance is
+`UnsupportedPendingArchitecture/TransientHealthToleranceDispositionUnavailable`
+before execution. A future accepted architecture must define its own sealed
+plan fields, exact disposition, persistence, priority, and recovery semantics;
+v1 cannot infer a threshold.
 
 The runtime never switches to direct, another proxy, another DNS mode, another
 family outside policy, or proxy-only scope to preserve apparent availability.
@@ -748,20 +1216,34 @@ IPv4/IPv6 policies, resolver choices, listener and executable replacement
 races, exclusion-set omissions, route/interface drift, lease loss, and
 fail-closed rollback. The contract specifies the complete matrix.
 
-They also cover all 47 canonical root tags, receipt-free authorization DAG and
-replay boundaries, Ed25519 signer header/role/key/channel/domain, the sole
-NonceEcho delivery-frame exception, local connected-peer replacement race,
+They also cover all 57 canonical root tags, receipt-free authorization DAG and
+replay boundaries, the mechanically closed digest-domain inventory, Ed25519
+signer header/role/key/channel/domain including the pre-plan discovery binding,
+release-only tag-49/tag-53 authorities, the closed
+serial family-tuple/candidate attempt sequence and continuation rules, unique
+socket child/connection epochs and first-following checkpoints, per-tuple
+NonceEcho consumption-root/delivery-frame exception and crash windows,
+HostLocal literal-only classification and DNS-local/mixed rejection,
+inline endpoint route/locality, baseline, local-listener and connected-kernel-
+peer replacement races, tag-54 isolation policy/capability plus optional
+existing pre-plan and mandatory preactivation/postactivation/renewal tag-55
+complete readbacks,
 socket-factory pre-byte queue/sequence/accumulator plus anti-echo factory/OS
-census completeness (including empty and close-only checkpoints), trust broker/
-runtime/adapter separation and time/context ordering, TLS 1.2/1.3 server-
+census completeness and closed policy/readback fields (including empty and
+close-only checkpoints), phase-specific
+external-gate/ResumeBarrier release evidence, cumulative lease socket bounds,
+trust broker/runtime/adapter separation and time/context/handle ordering, exact
+one-ClientHello/no-HRR/no-resumption evidence, TLS 1.2/1.3 server-
 authentication observations and pinned-adapter refusals, and the missing ARCH-
 001 normal-stop finalization protocol.
 
 Every platform/mode claimed supported by a release additionally requires real
 privileged direct and local-external proxy loop canaries on the exact packaged
 OS/architecture/backend tuple. Canary evidence must prove the intended path,
-one capture traversal rather than recursion, exclusion of every registered
-actor, ordinary connectivity before/during/after, interface-change handling,
+exactly one capture traversal for intended non-FlowProbe harness traffic, zero
+capture traversal for every released FlowProbe egress A connector, B SOCKS5 UDP
+control, C UDP relay child, and
+other excluded registered actor, ordinary connectivity before/during/after, interface-change handling,
 and stop/crash/watchdog/boot recovery. Remote-only tests cannot establish local
 listener exclusion. Fake tests and upstream sing-box features cannot establish
 platform support.
@@ -824,13 +1306,33 @@ Protocol decisions use:
 - [RFC 1928 SOCKS5](https://www.rfc-editor.org/rfc/rfc1928.html), including
   CONNECT, domain/IPv4/IPv6 address forms, UDP ASSOCIATE lifetime, relay
   endpoint, and optional fragmentation;
+- [RFC 768 UDP](https://datatracker.ietf.org/doc/html/rfc768), whose source port
+  is optional/zero when unused and whose minimum UDP length of eight permits an
+  empty application datagram, plus
+  [RFC 8085 section 5.1](https://www.rfc-editor.org/rfc/rfc8085.html#section-5.1)
+  for source-port/address validation and the non-prohibitive `SHOULD NOT` on a
+  zero source port;
 - [RFC 1929 username/password authentication](https://www.rfc-editor.org/rfc/rfc1929.html);
 - [RFC 5246 TLS 1.2 server key exchange](https://www.rfc-editor.org/rfc/rfc5246.html#section-7.4.3)
   and [client CertificateVerify](https://www.rfc-editor.org/rfc/rfc5246.html#section-7.4.8),
+  [TLS 1.2 ClientHello](https://www.rfc-editor.org/rfc/rfc5246.html#section-7.4.1.2),
+  [RFC 8446 ClientHello/HelloRetryRequest](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.1.2),
+  [ServerHello downgrade protection](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.1.3),
+  [supported versions](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.1),
+  [signature algorithms](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.3),
+  [supported groups](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.7),
+  [key share](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.8),
+  [early data](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.10),
+  [PSK key exchange](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.11),
   plus [RFC 8446 TLS 1.3 server CertificateVerify](https://www.rfc-editor.org/rfc/rfc8446.html#section-4.4.3),
   [RFC 6066 SNI](https://www.rfc-editor.org/rfc/rfc6066.html#section-3),
   [RFC 5280 path validation](https://www.rfc-editor.org/rfc/rfc5280.html#section-6),
+  [RFC 8422 ECDHE_ECDSA/EdDSA and ECDHE_RSA](https://www.rfc-editor.org/rfc/rfc8422.html#section-2.1),
   [RFC 9325 TLS deployment recommendations](https://www.rfc-editor.org/rfc/rfc9325.html),
+  [RFC 5077 session tickets](https://www.rfc-editor.org/rfc/rfc5077.html#section-3.2),
+  [RFC 4055 RSA-PSS parameters](https://www.rfc-editor.org/rfc/rfc4055.html#section-3.1),
+  [RFC 5746 secure renegotiation](https://www.rfc-editor.org/rfc/rfc5746.html#section-3.3),
+  [RFC 7627 extended master secret](https://www.rfc-editor.org/rfc/rfc7627.html#section-4),
   and [RFC 6960 OCSP](https://www.rfc-editor.org/rfc/rfc6960.html);
 - [RFC 9525 service identity](https://www.rfc-editor.org/rfc/rfc9525.html),
   including configured reference identity and exact IP identity matching; and
