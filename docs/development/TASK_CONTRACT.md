@@ -186,8 +186,8 @@ gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
 gh api repos/NexusAgentX/flowprobe-studio/collaborators --paginate
 ```
 
-The GOV-001 and GOV-004 live acceptance procedures use disposable pull requests
-that are all closed unmerged and whose branches are deleted:
+The GOV-001 and GOV-004 live acceptance procedures use disposable canary pull
+requests that are all closed unmerged and whose branches are deleted:
 
 1. A valid allowed-path pull request proves all four required checks are bound
    to its exact head and app id. Across the entire pull-request lifecycle, the
