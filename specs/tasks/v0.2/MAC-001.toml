@@ -1,0 +1,27 @@
+id = "MAC-001"
+milestone = "v0.2"
+title = "Implement the selected macOS native network backend"
+goal = "Implement every exact macOS tuple selected by ARCH-007, or retain and prove the fail-closed typed Unsupported backend when no macOS tuple was selected, while preserving the independent sing-box process boundary."
+depends_on = ["ARCH-007", "BACKEND-001", "CA-001"]
+allowed_paths = ["crates/platform-macos/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/platform-windows/**", "crates/platform-linux/**", "crates/runtime-api/**", "crates/supervisor/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --manifest-path crates/platform-macos/Cargo.toml -- --check",
+    "cargo clippy --manifest-path crates/platform-macos/Cargo.toml --all-targets --locked -- -D warnings",
+    "cargo test --manifest-path crates/platform-macos/Cargo.toml --all-targets --locked",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task MAC-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "If ARCH-007 selected macOS rows, the crate implements exactly those release, architecture, signing and distribution tuples and returns typed Unsupported elsewhere; if none was selected, it performs zero OS mutation and the typed Unsupported conformance suite passes",
+    "The package is a temporary standalone Cargo workspace with its own committed lockfile, depends only on the neutral BACKEND-001 API plus target-specific libraries, and does not depend on Supervisor or CA lifecycle or modify root workspace files",
+    "The backend preserves independent managed sing-box and helper processes and does not substitute an embedded libbox Network Extension, undocumented API, PID, utun name or whole-network snapshot for stable authority and rollback evidence",
+    "TUN attachment, route and DNS compare-before-restore, process exclusion, first-packet release, normal stop, helper or engine death, sleep or resume, restart and boot recovery preserve the ordinary-connectivity oracle under deterministic fault injection",
+    "User or Admin trust mutation occurs only through the selected authenticated context and exact certificate and trust-settings identity; the generic helper never receives a CA private key or foreground-admin authority",
+    "Native calls are behind injectable traits, non-macOS builds compile and test the typed unsupported boundary, and no fake backend can report a real host Ready",
+    "No accepted architecture, milestone, unrelated platform backend, compatibility shim, migration layer, requested reviewer or approval is changed or created",
+]

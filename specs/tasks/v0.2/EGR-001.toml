@@ -1,0 +1,35 @@
+id = "EGR-001"
+milestone = "v0.2"
+title = "Implement the typed egress and loop-prevention runtime boundary"
+goal = "Replace optimistic boolean egress probing with the accepted typed scope, selection, capability, readiness, evidence, disposition and bounded-failure boundary plus a deterministic fake, without performing host mutation or claiming real-host support."
+depends_on = ["PLAN-007"]
+allowed_paths = [
+    "crates/runtime-api/src/lib.rs",
+    "crates/runtime-api/src/types.rs",
+    "crates/runtime-api/src/error.rs",
+    "crates/runtime-api/src/fake.rs",
+    "crates/runtime-api/tests/fake_runtime.rs",
+    "crates/runtime-api/tests/egress_contract.rs",
+]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-runtime-api --test egress_contract",
+    "cargo clippy --locked -p flowprobe-runtime-api --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task EGR-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "NetworkRuntime exposes typed NetworkScope, Direct and external HTTP, HTTPS and SOCKS5 selections, path purpose, capability evidence, readiness, disposition and bounded reason values instead of a boolean direct-egress success shortcut",
+    "New trait operations have fail-closed typed Unsupported defaults so this boundary task does not require or fabricate an adapter, helper, privileged mutation, socket release or platform implementation",
+    "The deterministic fake records ordered requests and results, supports explicit injected evidence and failures, rejects stale generations, invalid transitions and unknown closed tags, and performs no network or operating-system operation",
+    "Fake or synthetic evidence cannot produce RealHostVerified, and no capability becomes Supported or Ready unless all contract-required evidence is explicitly supplied and internally consistent",
+    "Secrets, arbitrary paths, raw platform output and unbounded peer data do not appear in public results, operation logs, errors or Debug output",
+    "Behavior tests cover every selection and scope, default Unsupported behavior, evidence substitution, stale state, deterministic replay and redaction without test-only production wiring",
+    "Existing runtime lifecycle behavior remains available through the typed boundary and all workspace callers continue to compile through fail-closed defaults",
+    "No accepted architecture, dependency, manifest, lockfile, host implementation, milestone claim, placeholder or compatibility layer changes in EGR-001",
+]

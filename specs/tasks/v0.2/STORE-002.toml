@@ -1,0 +1,35 @@
+id = "STORE-002"
+milestone = "v0.2"
+title = "Persist and recover bounded UDP and DNS state"
+goal = "Implement the accepted UDP and DNS metadata, privacy, retention, capacity and crash-recovery storage semantics without persisting unapproved payloads or selecting independent per-store winners."
+depends_on = ["MODEL-002", "CAP-002"]
+allowed_paths = [
+    "crates/storage/src/lib.rs",
+    "crates/storage/src/sqlite.rs",
+    "crates/storage/src/udp_dns.rs",
+    "crates/storage/tests/udp_dns_recovery.rs",
+    "crates/storage/tests/fixtures/schema-v2.sql",
+]
+forbidden_paths = ["AGENTS.md", "crates/storage/AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-storage --test udp_dns_recovery",
+    "cargo clippy --locked -p flowprobe-storage --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task STORE-002 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "Schema v2 stores only bounded UDP and DNS metadata, provenance and the authorized exact, keyed-digest or redacted name form; metadata-only mode never stores datagram, DNS or credential payloads",
+    "Capacity, retention and publication use the accepted Arch004CapacityJointCow two-slot WAL with exactly one global commit marker and one ordered nine-store resulting-current tuple",
+    "Recovery derives all current fixed-store values from one globally validated committed decision, keeps its exact fallback, and never performs an independent per-store highest-revision selection or tuple splice",
+    "BodyOnly, Prepared, Aborted, Committed and committed-corrupt states are distinguished exactly; a valid Prepared body without Commit cleans only its authorized public targets and cannot change current",
+    "Retry uses a fresh attempt nonce and exact compare-and-swap against checkpoint, participant, Prepared digest and absent suffix; same suffix is idempotent and stale, rotated, sibling or reused targets fail closed",
+    "Public destinations resolve only through the exact current checkpoint or settled activation receipt and public indirection; settlement and garbage collection use exact raw-frame compare-delete and cannot reclaim a live fallback",
+    "All digest domains, count and byte budgets, retention deadlines, current and fallback parity, transaction identifiers and replacement-envelope rules are checked before publication or deletion",
+    "Crash tests cover every write and fsync boundary, same-revision siblings, torn slots and suffixes, committed corruption, rotation, collector reuse and capacity exhaustion; the unreleased schema is replaced directly without compatibility migration code",
+    "No analyzer-facing database access, platform mutation, dependency, manifest, lockfile, accepted architecture, milestone claim, placeholder or compatibility layer changes in STORE-002",
+]

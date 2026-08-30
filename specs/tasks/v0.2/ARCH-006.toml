@@ -1,0 +1,27 @@
+id = "ARCH-006"
+milestone = "v0.2"
+title = "Close the shared helper and runtime handoff protocol gaps"
+goal = "Define the one bounded upstream delta needed for executable v0.2 sessions: version the helper protocol for downstream transactions, add authenticated admission and normal-stop primitives, and freeze an independent-process TUN attachment and first-packet handoff without copying downstream state machines."
+depends_on = ["PLAN-007"]
+allowed_paths = ["docs/adr/0009-shared-v02-session-protocol.md", "docs/contracts/runtime-tun-attachment.md", "docs/contracts/runtime-control.md", "docs/contracts/privileged-helper.md", "docs/contracts/network-session-lifecycle.md", "docs/contracts/egress-and-loop-prevention.md", "docs/contracts/local-ca-lifecycle.md", "docs/contracts/udp-dns-baseline.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/0001-singbox-independent-runtime.md", "docs/adr/0002-rust-capture-core.md", "docs/adr/0003-wasm-analyzer-runtime.md", "docs/adr/0004-transactional-system-network-lifecycle.md", "docs/adr/0005-egress-and-loop-prevention.md", "docs/adr/0006-local-ca-trust-lifecycle.md", "docs/adr/0007-udp-dns-baseline.md", "docs/adr/0008-runtime-destination-udp-purpose.md", "docs/contracts/analyzer.wit", "docs/contracts/config-compiler.md", "docs/contracts/normalized-flow.md", "docs/contracts/storage.md", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task ARCH-006 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "ADR-0009 is accepted and records only the upstream protocol delta that the accepted egress and CA contracts explicitly defer; it does not restate either downstream contract",
+    "The closed helper protocol is versioned with byte-exact bounded messages for persistent trust transactions, composite admission-release commit, authenticated linearizable proof reads, ordinary-stop acknowledgement and finalization, recovery, key and user or administrator one-use gates, peer binding, deadlines, receipts and typed errors",
+    "The runtime attachment contract gives the independent managed sing-box process one typed external TUN ownership and handoff surface with stable instance and attachment identity, authenticated peer binding, bounded backpressure, first-packet ResumeBarrier, close, restart, and crash semantics without embedding sing-box or Capture Core in a privileged process",
+    "The amendment defines deterministic contention on the one global mutation lock while keeping core.session and trust.ca generation, fence, authorization and recovery domains distinct",
+    "The runtime-control, network-session and helper contracts change only where external attachment, shared lock, admission dependency, normal-stop finalization, or connectivity-first failure interaction requires an exact cross-contract rule",
+    "Every current support matrix gains the same fail-closed reference to one future platform-support-v0.2 profile contract; until ARCH-007 accepts that profile, all existing rows and bounded unsupported reasons remain byte-for-byte authoritative",
+    "Egress, CA and UDP or DNS contract edits are limited to the shared upstream message references and support-profile extension point and do not alter their domain state machines, policy, privacy, storage or conformance rules",
+    "The amendment does not duplicate the downstream CA state machine, consent, key-provider, platform-target, consumer, support-matrix or real-host evidence contracts and does not assign implementation paths",
+    "Unknown versions, tags, fields, peers, stale gates and downgrade attempts fail closed, and canonical golden vectors plus restart and response-loss semantics are normative",
+    "No platform, backend or consumer becomes Supported from this amendment alone, no implementation or fixture is added, and all current-head repository gates pass",
+]

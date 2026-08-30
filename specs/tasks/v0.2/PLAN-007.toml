@@ -1,0 +1,29 @@
+id = "PLAN-007"
+milestone = "v0.2"
+title = "Bootstrap the executable v0.2 implementation DAG"
+goal = "Move v0.2 from architecture to code with parallel deterministic egress and UDP/DNS tasks, one bounded shared-protocol amendment, evidence-gated native backends, product integration, and an exact release gate."
+depends_on = ["ARCH-004"]
+allowed_paths = ["specs/tasks/v0.2/PLAN-007.toml", "specs/tasks/v0.2/ARCH-006.toml", "specs/tasks/v0.2/EGR-001.toml", "specs/tasks/v0.2/MODEL-002.toml", "specs/tasks/v0.2/CFG-002.toml", "specs/tasks/v0.2/CAP-002.toml", "specs/tasks/v0.2/STORE-002.toml", "specs/tasks/v0.2/UPSTREAM-001.toml", "specs/tasks/v0.2/TUN-001.toml", "specs/tasks/v0.2/BACKEND-001.toml", "specs/tasks/v0.2/WATCH-001.toml", "specs/tasks/v0.2/CA-001.toml", "specs/tasks/v0.2/HOST-001.toml", "specs/tasks/v0.2/ARCH-007.toml", "specs/tasks/v0.2/PLAT-001.toml", "specs/tasks/v0.2/WIN-001.toml", "specs/tasks/v0.2/LINUX-001.toml", "specs/tasks/v0.2/MAC-001.toml", "specs/tasks/v0.2/APP-002.toml", "specs/tasks/v0.2/EVID-001.toml", "specs/tasks/v0.2/INT-004.toml"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/tasks/README.md", "specs/tasks/v0.1/**", "specs/tasks/v0.2/PLAN-006.toml", "specs/tasks/v0.2/PLAN-008.toml", "specs/tasks/v0.2/PLAN-009.toml", "specs/tasks/v0.2/GOV-004.toml", "specs/tasks/v0.2/ARCH-001.toml", "specs/tasks/v0.2/ARCH-002.toml", "specs/tasks/v0.2/ARCH-003.toml", "specs/tasks/v0.2/ARCH-004.toml", "specs/tasks/v0.2/ARCH-005.toml", "specs/nonconformance/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "probes/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task PLAN-007 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "PLAN-007 and the twenty exact downstream task contracts listed in allowed_paths are the only added paths, every file is regular mode-100644 TOML, and the trusted-base planning bootstrap accepts the combined acyclic repository DAG",
+    "EGR-001 and MODEL-002 depend only on PLAN-007 and are immediately ready to implement in parallel after this planning merge; no further architecture document blocks their typed deterministic code",
+    "CFG-002, CAP-002, STORE-002, UPSTREAM-001 and TUN-001 form focused ordered code slices for protected compilation, bounded UDP and DNS parsing, durable derived metadata, exact direct or external proxy protocol behavior, and independent-runtime packet handoff",
+    "ARCH-006 is the only pre-integration architecture delta and is limited to helper protocol versioning, authenticated admission release and normal-stop primitives, plus the independent-process TUN attachment and first-packet handoff omitted by accepted upstream contracts",
+    "WATCH-001 and CA-001 implement deterministic transaction, helper, watchdog and persistent CA cores while all native capabilities remain accurately Unsupported or Unsafe until evidence-backed architecture and backend tasks merge",
+    "BACKEND-001 is the sole dependency-neutral owner of native observation and mutation traits, preventing Supervisor, CA and platform packages from depending on one another cyclically",
+    "HOST-001 collects immutable isolated feasibility evidence, ARCH-007 selects only exact evidence-backed platform tuples, WIN-001, LINUX-001 and MAC-001 independently implement selected rows or explicit Unsupported in standalone locked packages, and PLAT-001 registers their completed code in the root workspace once",
+    "APP-002 is the only product integration task, EVID-001 is the only privileged release-evidence task, and INT-004 is the only task authorized to update the v0.2 milestone after all deterministic and real-host gates pass",
+    "Conditional native tasks may close with explicit Unsupported when evidence selects no row, but EVID-001 and INT-004 cannot complete v0.2 without at least one exact Ready and RealHostVerified row on each required Windows, Linux and macOS platform",
+    "Each ordinary implementation task forbids accepted architecture and task contracts, uses behavior-level focused checks plus the repository gates, and introduces no placeholder, fake production success, compatibility shim or migration layer",
+    "This planning change contains no implementation, architecture prose, fixture, milestone claim, workflow change, remote setting change, dependency, manifest or lockfile change",
+    "The planning pull request body contains exactly one unquoted Task ID: PLAN-007 line, creates no requested reviewer or approval, all current-head checks pass, and an independent reviewer reports P0-P2 zero for scope, dependency order, architecture coverage and evidence boundaries",
+]

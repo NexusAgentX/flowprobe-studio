@@ -1,0 +1,27 @@
+id = "LINUX-001"
+milestone = "v0.2"
+title = "Implement the selected Linux native network backend"
+goal = "Implement every exact Linux tuple selected by ARCH-007, or retain and prove the fail-closed typed Unsupported backend when no Linux tuple was selected, without claiming generic Linux support."
+depends_on = ["ARCH-007", "BACKEND-001", "CA-001"]
+allowed_paths = ["crates/platform-linux/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/platform-windows/**", "crates/platform-macos/**", "crates/runtime-api/**", "crates/supervisor/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --manifest-path crates/platform-linux/Cargo.toml -- --check",
+    "cargo clippy --manifest-path crates/platform-linux/Cargo.toml --all-targets --locked -- -D warnings",
+    "cargo test --manifest-path crates/platform-linux/Cargo.toml --all-targets --locked",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task LINUX-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "If ARCH-007 selected Linux rows, the crate implements exactly those distribution, release, architecture, kernel, init, resolver, network manager and package tuples and returns typed Unsupported elsewhere; if none was selected, it performs zero OS mutation and the typed Unsupported conformance suite passes",
+    "The package is a temporary standalone Cargo workspace with its own committed lockfile, depends only on the neutral BACKEND-001 API plus target-specific libraries, and does not depend on Supervisor or CA lifecycle or modify root workspace files",
+    "TUN, route, rule, firewall, DNS and process-exclusion operations use stable FlowProbe ownership identities, journaled before and after observations, compare-before-restore and bounded recovery without treating interface names or process IDs as durable identity",
+    "External runtime attachment, first-packet release, normal stop, helper or engine death, stale owner, restart and boot recovery preserve the ordinary-connectivity oracle under deterministic fault injection",
+    "System trust and any selected NSS target use exact source, derived artifact, regenerator, database and consumer identities; generic bundle edits, HOME discovery and whole-database restore are impossible",
+    "Native calls are behind injectable traits, non-Linux builds compile and test the typed unsupported boundary, and no fake backend can report a real host Ready",
+    "No accepted architecture, milestone, unrelated platform backend, compatibility shim, migration layer, requested reviewer or approval is changed or created",
+]

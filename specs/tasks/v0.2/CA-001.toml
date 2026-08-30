@@ -1,0 +1,30 @@
+id = "CA-001"
+milestone = "v0.2"
+title = "Implement the deterministic local CA lifecycle"
+goal = "Implement the accepted persistent CA lifecycle, versioned helper messages, protected-key boundary abstractions, recovery logic and deterministic fake backends without claiming native platform support."
+depends_on = ["WATCH-001", "BACKEND-001"]
+allowed_paths = ["crates/ca-lifecycle/**", "Cargo.toml", "Cargo.lock"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/analyzer-runtime/**", "crates/capture-core/**", "crates/config-compiler/**", "crates/ipc/**", "crates/model/**", "crates/runtime-api/**", "crates/storage/**", "crates/supervisor/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo clippy -p flowprobe-ca-lifecycle --all-targets --locked -- -D warnings",
+    "cargo test -p flowprobe-ca-lifecycle --all-targets --locked",
+    "cargo test -p flowprobe-ca-lifecycle --locked --test protocol_golden_vectors",
+    "cargo test -p flowprobe-ca-lifecycle --locked --test lifecycle_conformance",
+    "cargo test -p flowprobe-ca-lifecycle --locked --test crash_recovery_matrix",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task CA-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The crate implements the complete accepted lifecycle, journal and index transitions, consent replay rules, rotation, drift, recovery, identity-set and admission proofs with canonical bounded encodings and typed failures",
+    "Private-key operations cross a narrow non-exporting authority interface, ordinary values and diagnostics contain no secret, provider handle, public DER, arbitrary platform path or captured credential, and zeroization and ambiguous-destruction paths are tested",
+    "Deterministic fake key providers and target backends inject external mutation, response loss, restart and every observable crash boundary and prove idempotent convergence without an installed-boolean shortcut",
+    "Native trust observation and mutation use only BACKEND-001 traits; the CA lifecycle crate defines no duplicate platform trait and depends on neither Supervisor nor a platform package, while its CA-specific bounded helper payload types and canonical codec are consumed one-way by later Supervisor integration",
+    "Protocol golden vectors, malformed input, stale or substituted authority, partial multi-target success, exact ownership, preservation of foreign state and connectivity-first admission behavior have behavior-level tests",
+    "Every key-provider, native trust target, derived output and consumer capability remains Unsupported and Unsafe with its contract-required bounded reasons; fake success never supplies real-host, durability or browser evidence",
+    "The implementation introduces no placeholder, compatibility layer, platform mutation, renderer authority, support-matrix edit or milestone completion claim, and all focused and repository-wide gates pass",
+]

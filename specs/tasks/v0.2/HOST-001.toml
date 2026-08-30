@@ -1,0 +1,30 @@
+id = "HOST-001"
+milestone = "v0.2"
+title = "Probe native v0.2 platform feasibility on disposable hosts"
+goal = "Build an isolated Windows, macOS and Linux feasibility harness that tests exact candidate TUN, runtime handoff, route, DNS, loop exclusion, watchdog, and CA trust primitives without wiring product mutations or promoting any support row."
+depends_on = ["WATCH-001", "UPSTREAM-001", "CA-001", "CAP-002", "STORE-002"]
+allowed_paths = ["probes/v0_2/**", "scripts/run_v0_2_host_probe.py", "scripts/check_v0_2_host_evidence.py", "tests/release/v0_2/feasibility/**", "docs/release-evidence/v0.2/feasibility/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/fixtures/**", "tests/integration/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B -m unittest discover -s probes/v0_2/tests",
+    "python -B scripts/run_v0_2_host_probe.py validate-manifests",
+    "python -B scripts/check_v0_2_host_evidence.py --validate-only tests/release/v0_2/feasibility --require-platform windows --require-platform linux --require-platform macos --require-positive-and-negative-candidates",
+    "python -B scripts/check_v0_2_host_evidence.py --self-test-profile-verification",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task HOST-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The harness has signed, bounded, fail-closed manifests for exact Windows, macOS and Linux OS, architecture, package, helper, network backend, resolver, trust target and consumer tuples and refuses generic platform labels or caller-selected stores, paths, commands and profiles",
+    "The canonical feasibility set contains complete signed positive and negative candidate results for Windows, Linux and macOS, including every required primitive and structural blocker; completeness does not imply that any candidate is selected or Supported",
+    "Unit tests deterministically validate evidence schemas, redaction, before and after inventory equality, crash-point completeness, concurrent external mutation, exact removal, consumer-positive and consumer-negative results and missing or substituted evidence rejection",
+    "The checker exposes and tests the stable --verify-profile, --require-source-task and repeatable --require-platform CLI used by ARCH-007, with a canonical support-profile reference grammar and synthetic positive and missing, incomplete, bad-signature, wrong-source, wrong-platform and digest-substitution cases",
+    "Privileged probes run only by explicit invocation in disposable signed-release hosts, preserve unrelated network and trust state, exercise TUN attachment, ResumeBarrier, route and DNS rollback, loop exclusion, restart, boot and hard-stop boundaries, and never run as part of ordinary CI or mise run check",
+    "Windows adapter, exclusion and physical-store candidates, macOS independent-process TUN, route, User and foreground Admin trust candidates, and each Linux distribution, kernel, resolver, exclusion, regenerator, derived output and NSS candidate retain independent results",
+    "Probe output records failures and structural impossibility as evidence instead of weakening conditional-mutation, stable-revision, crash-durability, trust-purpose or product-policy requirements",
+    "The harness does not modify product code, accepted architecture, support matrices or milestone status and cannot mark any key provider, platform target, derived output or consumer Supported",
+    "No real key, captured secret, arbitrary inventory or unbounded platform error enters fixtures or evidence, and all focused and repository-wide gates pass",
+]

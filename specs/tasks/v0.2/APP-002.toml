@@ -1,0 +1,32 @@
+id = "APP-002"
+milestone = "v0.2"
+title = "Integrate the v0.2 network layer into Supervisor and desktop"
+goal = "Wire the accepted deterministic cores and selected native backends through Supervisor, NetworkRuntime, typed IPC, and the desktop so users can inspect capability and safely start, stop, recover, configure egress, and manage persistent CA intent."
+depends_on = ["PLAT-001", "UPSTREAM-001", "STORE-002"]
+allowed_paths = ["Cargo.lock", "crates/supervisor/Cargo.toml", "crates/supervisor/src/lib.rs", "crates/supervisor/src/v02.rs", "crates/supervisor/src/bin/flowprobe-network-helper.rs", "crates/supervisor/tests/v02_integration.rs", "crates/ipc/src/lib.rs", "crates/ipc/src/v02.rs", "crates/ipc/tests/v02_contract.rs", "apps/desktop/src-tauri/Cargo.toml", "apps/desktop/src-tauri/src/lib.rs", "apps/desktop/src-tauri/src/network.rs", "apps/desktop/src/App.tsx", "apps/desktop/src/App.test.tsx", "apps/desktop/src/status.ts", "apps/desktop/src/status.test.ts", "apps/desktop/src/network.ts", "apps/desktop/src/network.test.ts", "apps/desktop/src/ipc/generated.ts", "apps/desktop/src/ipc/generated.test.ts", "apps/desktop/src/ipc/index.ts", "apps/desktop/src/styles.css", "apps/desktop/src/styles.test.ts"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "crates/runtime-api/**", "crates/network-backend-api/**", "crates/supervisor/src/network_session.rs", "crates/supervisor/src/network_session/**", "crates/model/**", "crates/capture-core/**", "crates/config-compiler/**", "crates/storage/**", "crates/ca-lifecycle/**", "crates/platform-windows/**", "crates/platform-linux/**", "crates/platform-macos/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo clippy -p flowprobe-supervisor -p flowprobe-runtime-api -p flowprobe-ipc -p flowprobe-singbox-runtime --all-targets -- -D warnings",
+    "cargo test -p flowprobe-supervisor -p flowprobe-runtime-api -p flowprobe-ipc -p flowprobe-singbox-runtime --all-targets",
+    "pnpm --dir apps/desktop lint",
+    "pnpm --dir apps/desktop test",
+    "pnpm --dir apps/desktop build",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task APP-002 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "Renderer IPC exposes typed intent, capability, progress, recovery and redacted diagnostics only; it cannot submit arbitrary helper operations, paths, commands, private keys, captured credentials or raw trust material",
+    "Start remains uncommitted until exact platform, egress, loop-exclusion, UDP or DNS, helper, watchdog and connectivity predicates are Ready; unsupported rows return bounded reasons and never optimistic success",
+    "Stop, UI death, runtime death, helper death, lease loss and restart reconcile through the single journal authority and never report Inactive while recovery or owned network state remains unresolved",
+    "CA intent is persistent and independent of network-session stop; interception admission requires matching key possession and current installed-trust proof and otherwise follows the explicit pass-through or refusal policy",
+    "The desktop makes requested, active, degraded, unsupported and recovery-required states visibly distinct and never relabels a fake or deterministic result as real-host evidence",
+    "Focused Rust and renderer tests cover command authorization, secret redaction, concurrent intent, crash recovery and typed unsupported paths without test-only production wiring",
+    "Integration changes only dependency wiring, Supervisor orchestration, typed IPC, Tauri commands and renderer state; EGR-001 types and fake, WATCH-001 protocol, journal, watchdog and helper, UPSTREAM-001 engines and every native backend remain unchanged",
+    "The helper entrypoint is limited to compile-time target selection and dependency injection of the already implemented BACKEND-001 trait object; it cannot change protocol parsing, authorization, journal, watchdog, recovery or backend behavior",
+    "No accepted architecture, milestone claim, compatibility shim, migration layer, requested reviewer or approval is changed or created",
+]

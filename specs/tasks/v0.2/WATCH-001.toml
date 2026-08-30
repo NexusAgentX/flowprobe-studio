@@ -1,0 +1,43 @@
+id = "WATCH-001"
+milestone = "v0.2"
+title = "Implement helper journal, watchdog, and network-session recovery"
+goal = "Implement the accepted authenticated helper process protocol, single-writer durable journal and deterministic Supervisor watchdog recovery without installing a native backend or releasing an unsupported host mutation."
+depends_on = ["BACKEND-001", "STORE-002"]
+allowed_paths = [
+    "Cargo.lock",
+    "crates/supervisor/Cargo.toml",
+    "crates/supervisor/src/lib.rs",
+    "crates/supervisor/src/network_session.rs",
+    "crates/supervisor/src/network_session/protocol.rs",
+    "crates/supervisor/src/network_session/journal.rs",
+    "crates/supervisor/src/network_session/watchdog.rs",
+    "crates/supervisor/src/bin/flowprobe-network-helper.rs",
+    "crates/supervisor/tests/network_session.rs",
+    "crates/supervisor/tests/watchdog_recovery.rs",
+]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-supervisor --test network_session",
+    "cargo test --locked -p flowprobe-supervisor --test watchdog_recovery",
+    "cargo clippy --locked -p flowprobe-supervisor --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task WATCH-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "flowprobe-network-helper is a separate executable process with a closed versioned bounded protocol, authenticated peer and session binding, monotonic generation and fence checks, deadlines, replay-safe request identities and redaction-safe typed errors",
+    "One helper-owned mutation lock and durable intent, before-image, after-image, commit and recovery journal serialize network and trust transactions while preserving their distinct generation and authorization domains",
+    "Every state-changing response is replayable after response loss, unknown versions or tags and stale peers fail closed, and no renderer-controlled path, command, platform object or secret crosses the authority boundary",
+    "AdmissionReleaseProofRead is authenticated and linearizable against the exact committed composite state; socket release cannot proceed from an in-memory boolean, stale receipt, partial participant or uncommitted journal record",
+    "Normal stop uses the accepted finalization request and durable receipt ordering and never reports Inactive while owned state, an open lease or unresolved recovery remains",
+    "Lease loss, Supervisor death, runtime death, helper restart, watchdog takeover and boot recovery converge idempotently through compare-before-restore without overwriting unrelated external changes",
+    "A deterministic fake mutation backend provides exact state images and failpoints at every observable journal, fsync, response and takeover boundary but is never wired as a production backend",
+    "All platform operations are expressed only through BACKEND-001 traits; Supervisor and the helper protocol, journal and watchdog introduce no platform-specific trait or dependency",
+    "The helper returns typed Unsupported before mutation because no native platform backend or real-host evidence is installed by this task; deterministic success cannot promote any support row",
+    "Tests cover concurrent intents, stale fences, protocol downgrade, response loss, partial journal records, external drift, normal stop, crash and restart convergence and ordinary-connectivity oracle preservation",
+    "The process boundary is implemented inside the existing supervisor package without changing root workspace membership; any protocol dependency is mature, minimal, locked and called out, and the task introduces no platform mutation, accepted architecture, milestone claim, placeholder or compatibility layer",
+]

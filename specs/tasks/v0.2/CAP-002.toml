@@ -1,0 +1,40 @@
+id = "CAP-002"
+milestone = "v0.2"
+title = "Decode bounded UDP and DNS observations"
+goal = "Implement deterministic generic UDP accounting and bounded DNS parsing and correlation in Capture Core, preserving pass-through and explicit opaque or unavailable results for malformed, fragmented, encrypted and unsupported traffic."
+depends_on = ["MODEL-002"]
+allowed_paths = [
+    "crates/capture-core/src/lib.rs",
+    "crates/capture-core/src/error.rs",
+    "crates/capture-core/src/udp.rs",
+    "crates/capture-core/src/dns.rs",
+    "crates/capture-core/src/dns_correlation.rs",
+    "crates/capture-core/tests/udp_dns_fixtures.rs",
+    "tests/fixtures/dns/basic-query.hex",
+    "tests/fixtures/dns/compressed-response.hex",
+    "tests/fixtures/dns/truncated-response.hex",
+    "tests/fixtures/dns/malformed-compression-loop.hex",
+]
+forbidden_paths = ["AGENTS.md", "crates/capture-core/AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-capture-core --test udp_dns_fixtures",
+    "cargo clippy --locked -p flowprobe-capture-core --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task CAP-002 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "A bounded datagram-flow table accounts direction, packet and byte totals, original destination, provenance, first and last observation, idle closure and explicit eviction without persisting payload bytes",
+    "The DNS parser validates headers, labels, compression pointers, section counts, record lengths and canonical names under fixed depth, count, message-size and work budgets and never panics on hostile input",
+    "Correlation is transport and endpoint bound, distinguishes QR and opcode, handles duplicate, reordered, lost and timed-out messages deterministically, and records truncation and a matching TCP retry without cross-flow attachment",
+    "Fragmented or incomplete IP input, unsupported record content, malformed DNS and resource exhaustion yield bounded opaque, unavailable or pass-through outcomes instead of reassembly, unbounded buffering or connectivity failure",
+    "DoH, DoT, DoQ, QUIC and other encrypted traffic remains encrypted-opaque unless a separately supported decoder supplied an authenticated plaintext observation",
+    "Exact, keyed-digest and redacted DNS name handling follows the model policy; ordinary logs, errors and fixtures contain no real credentials, user DNS names or captured payloads",
+    "Deterministic fixtures cover UDP query and compressed response, truncation and TCP retry, malformed compression loops, timeouts, flow eviction and all resource ceilings",
+    "Capture Core remains independent from sing-box internals, host routing, privileged mutation, runtime support reporting and storage layout",
+    "No dependency, manifest, lockfile, accepted architecture, milestone claim, native backend, placeholder or compatibility layer changes in CAP-002",
+]

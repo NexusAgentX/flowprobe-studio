@@ -1,0 +1,28 @@
+id = "EVID-001"
+milestone = "v0.2"
+title = "Collect privileged v0.2 release evidence"
+goal = "Execute the immutable APP-002 product source on disposable exact Windows, Linux, and macOS support tuples and retain a separately content-addressed evidence bundle for connectivity, rollback, loop prevention, UDP and DNS visibility, and exact CA lifecycle behavior."
+depends_on = ["APP-002"]
+allowed_paths = ["tests/release/v0_2/product/**", "scripts/check_v0_2_release_evidence.py", ".github/workflows/v0_2-platform-evidence.yml", "docs/release-evidence/v0.2/product/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/development/**", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/fixtures/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/check_v0_2_release_evidence.py --product-source-task APP-002 --evidence-ref HEAD --require-all-selected-tuples --require-platform windows --require-platform linux --require-platform macos",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task EVID-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "Every signed host result binds the immutable APP-002 product source commit and product-tree digest, clean build inputs, exact OS release and architecture, installed package digests, helper identity, runtime version, platform tuple, test manifest and monotonic timestamps and rejects stale, partial, unsigned or cross-source reuse",
+    "The evidence branch changes no product or build-input path after the APP-002 source; its canonical evidence-bundle digest is computed over the complete signed result set and manifest with the bundle-digest field excluded, avoiding a self-referential Git commit requirement",
+    "The verifier reads but cannot modify HOST-001 feasibility evidence and requires the exact evidence digests frozen by the accepted ARCH-007 platform-support profile",
+    "Every selected support row proves ordinary connectivity before activation, during the requested mode, after healthy stop, and after injected UI, engine, helper, watchdog and abrupt-machine-restart failures",
+    "The evidence set contains at least one accepted and implemented support row for each of Windows, Linux and macOS; an empty or partial selected set is a blocking result rather than vacuous success",
+    "Direct and local external proxy paths prove process-aware loop prevention with IPv4, IPv6 and the selected UDP or DNS policy, including negative tests for ambiguous listener identity, unavailable exclusion and prohibited direct fallback",
+    "CA evidence covers explicit consent, generation, exact install, TLS consumer success and negative controls, drift, concurrent administrator mutation, restart recovery, exact uninstall, key destruction and byte-identical preservation of unrelated trust state",
+    "No unselected tuple, fake backend, ordinary hosted runner, documentation assertion or command-success boolean is counted as real privileged support evidence",
+    "Evidence collection uses disposable hosts, retains no real credentials, CA private keys or captured secrets, and documents cleanup or destruction of every test identity",
+    "The pull request creates no requested reviewer or approval and all machine checks pass",
+]

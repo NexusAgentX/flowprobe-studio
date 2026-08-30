@@ -1,0 +1,27 @@
+id = "ARCH-007"
+milestone = "v0.2"
+title = "Select exact v0.2 native platform support rows"
+goal = "Use reproducible native feasibility evidence to select only exact Windows, Linux, and macOS release tuples whose TUN ownership, rollback, loop exclusion, helper authority, and CA trust primitives can satisfy the accepted contracts."
+depends_on = ["HOST-001"]
+allowed_paths = ["docs/adr/0010-v02-native-platform-support.md", "docs/contracts/platform-support-v0.2.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/0001-singbox-independent-runtime.md", "docs/adr/0002-rust-capture-core.md", "docs/adr/0003-wasm-analyzer-runtime.md", "docs/adr/0004-transactional-system-network-lifecycle.md", "docs/adr/0005-egress-and-loop-prevention.md", "docs/adr/0006-local-ca-trust-lifecycle.md", "docs/adr/0007-udp-dns-baseline.md", "docs/adr/0008-runtime-destination-udp-purpose.md", "docs/adr/0009-shared-v02-session-protocol.md", "docs/contracts/analyzer.wit", "docs/contracts/config-compiler.md", "docs/contracts/normalized-flow.md", "docs/contracts/runtime-control.md", "docs/contracts/runtime-tun-attachment.md", "docs/contracts/network-session-lifecycle.md", "docs/contracts/privileged-helper.md", "docs/contracts/egress-and-loop-prevention.md", "docs/contracts/local-ca-lifecycle.md", "docs/contracts/udp-dns-baseline.md", "docs/contracts/storage.md", "docs/development/**", "docs/milestones/**", "docs/release-evidence/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/check_v0_2_host_evidence.py --verify-profile docs/contracts/platform-support-v0.2.md --require-source-task HOST-001 --require-platform windows --require-platform linux --require-platform macos",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task ARCH-007 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "ADR-0010 records the exact signed evidence set and selects no broader support claim than the tested operating-system release, architecture, distribution channel, helper identity, network backend, resolver, trust target, and TLS consumer tuple",
+    "The Windows selection proves stable adapter and route identity, external runtime attachment, first-packet resume gating, process exclusion, crash rollback, boot recovery, exact trust mutation and preservation of unrelated state before any row becomes SupportedByDesign",
+    "The Linux selection names exact distribution, release, architecture, kernel, init, resolver, network manager, package, TUN, exclusion, system trust and optional NSS tuple; generic Linux is never a support row",
+    "The macOS selection names exact release, architecture and distribution model and proves an independent-process-compatible TUN authority, helper authentication, route and DNS compare-before-restore, loop exclusion, foreground trust interaction where required, and crash recovery",
+    "Every failed, incomplete, stale, unsigned, synthetic, fake-host or cross-tuple result preserves the corresponding UnsupportedPendingArchitecture or UnsupportedByPlatform reason instead of being averaged into a platform claim",
+    "The new platform-support profile contains the complete selected and unselected rows and binds every selection to exact HOST-001 evidence digests; it cannot amend or override lifecycle, helper, handoff, egress, CA, UDP, DNS, privacy, rollback or evidence semantics",
+    "The merged HOST-001 verifier mechanically proves source commit and manifest identity, signatures, complete candidate results for all three platforms and byte-exact profile digest references; ARCH-007 cannot modify that verifier or its evidence",
+    "The task changes no previously accepted ADR or contract and contains no implementation, fixture change, milestone completion claim, dependency change, compatibility shim or migration layer",
+    "The architecture pull request body contains exactly one unquoted Task ID: ARCH-007 line, creates no requested reviewer or approval, all machine checks pass, and an independent reviewer reports P0-P2 zero",
+]
