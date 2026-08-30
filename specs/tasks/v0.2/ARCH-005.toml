@@ -1,0 +1,27 @@
+id = "ARCH-005"
+milestone = "v0.2"
+title = "Register direct destination UDP in the egress path model"
+goal = "Amend the accepted egress and loop-prevention architecture with one closed direct-destination UDP path purpose that ARCH-004 can realize through the existing preventive actor, socket-factory, exclusion, checkpoint and evidence model."
+depends_on = ["ARCH-002", "PLAN-009"]
+allowed_paths = ["docs/adr/0008-runtime-destination-udp-purpose.md", "docs/contracts/egress-and-loop-prevention.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/0001-singbox-independent-runtime.md", "docs/adr/0002-rust-capture-core.md", "docs/adr/0003-wasm-analyzer-runtime.md", "docs/adr/0004-transactional-system-network-lifecycle.md", "docs/adr/0005-egress-and-loop-prevention.md", "docs/adr/0006-local-ca-trust-lifecycle.md", "docs/adr/0007-udp-dns-baseline.md", "docs/contracts/analyzer.wit", "docs/contracts/config-compiler.md", "docs/contracts/normalized-flow.md", "docs/contracts/runtime-control.md", "docs/contracts/storage.md", "docs/contracts/network-session-lifecycle.md", "docs/contracts/privileged-helper.md", "docs/contracts/local-ca-lifecycle.md", "docs/contracts/udp-dns-baseline.md", "docs/development/**", "docs/milestones/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task ARCH-005 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "ADR-0008 is accepted and records the discovered closed-enum dependency defect, the minimal amendment and the unchanged ARCH-001/002 ownership, policy and support boundaries",
+    "PathPurpose appends one stable RuntimeDestinationUdp variant without renumbering or weakening any existing variant, endpoint binding or unknown-variant rejection",
+    "RuntimeDestinationUdp uses OwnedActorAllExternalEndpoints only as preventive loop scope for the same actor's exact socket-factory policy and never as destination, routing, policy or send authority",
+    "A RuntimeDestinationUdp RequiredPath and socket child are legal only for UDP on the exact selected Direct egress and an exact accepted ARCH-004 transport.udp.path.v1 binding; before ARCH-004 supplies that binding the path remains unsupported and sends zero bytes",
+    "The amendment updates every affected allowed-purpose cardinality, actor graph equality, factory policy and capability coverage, SocketPolicyChildObservation validation, accumulator/checkpoint/census equality and bounded deterministic test requirement",
+    "Direct destination UDP inherits the same preventive mechanism read-back, pre-publication socket admission, first-byte gate, route/interface proof, exclusion-set completeness, health renewal, close/release and crash-recovery rules as every existing operational child",
+    "External HTTP/HTTPS remain unable to carry UDP, SOCKS5 UDP continues to use only its existing role-C Socks5UdpRelay path, and no MASQUE, CONNECT-UDP, ambient direct fallback or additional forwarding path is introduced",
+    "StaticSupport, Readiness and Evidence claims for every platform remain unchanged; this amendment alone makes no Windows, macOS or Linux mode Ready or supported",
+    "No implementation, fixture, task contract, dependency, manifest, lockfile, milestone claim, unrelated accepted architecture artifact or compatibility/migration change is included",
+    "The architecture pull request body contains exactly one unquoted Task ID: ARCH-005 line, uses an arch: title, creates no requested reviewer or approval, all machine checks pass, and an independent reviewer reports P0-P2 zero",
+]

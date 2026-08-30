@@ -1,0 +1,26 @@
+id = "PLAN-008"
+milestone = "v0.2"
+title = "Repair the UDP path-purpose dependency before ARCH-004"
+goal = "Authorize one narrow amendment to the accepted egress contract so ARCH-004 can bind direct destination UDP to the existing preventive actor, socket-factory, exclusion, checkpoint and evidence model without hiding an upstream contract change inside the downstream architecture task."
+depends_on = ["PLAN-006", "ARCH-002", "ARCH-003"]
+allowed_paths = ["specs/tasks/v0.2/PLAN-008.toml", "specs/tasks/v0.2/ARCH-005.toml", "specs/tasks/v0.2/PLAN-009.toml"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/tasks/README.md", "specs/tasks/v0.1/**", "specs/tasks/v0.2/PLAN-006.toml", "specs/tasks/v0.2/GOV-004.toml", "specs/tasks/v0.2/ARCH-001.toml", "specs/tasks/v0.2/ARCH-002.toml", "specs/tasks/v0.2/ARCH-003.toml", "specs/tasks/v0.2/ARCH-004.toml", "specs/nonconformance/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task PLAN-008 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "PLAN-008, ARCH-005 and PLAN-009 are the only added paths, no trusted-base path changes, and all three are regular mode-100644 TOML files accepted by the trusted-base planning bootstrap",
+    "PLAN-009 depends on PLAN-008 and authorizes only the exact ARCH-004 task-contract dependency correction",
+    "ARCH-005 depends on PLAN-009 and ARCH-002 and explicitly authorizes only a new amendment ADR plus the accepted egress-and-loop-prevention contract",
+    "ARCH-005 is limited to adding the closed RuntimeDestinationUdp path purpose and every directly required actor graph, endpoint-authority, socket-factory, child-observation, checkpoint, bound and conformance predicate; it cannot change egress policy, add another forwarding mechanism or claim platform support",
+    "The correction records that ARCH-002 currently rejects every unrecognized PathPurpose and therefore ARCH-004 cannot make direct UDP Ready without an explicit accepted upstream amendment",
+    "PLAN-007 remains absent and cannot bootstrap implementation work until PLAN-009, ARCH-005 and then ARCH-004 merge; this correction creates no implementation task or placeholder implementation scope",
+    "The planning change contains no architecture prose, implementation, fixture, milestone claim, workflow, remote setting, compatibility shim, migration layer or dependency change",
+    "The pull request body contains exactly one unquoted Task ID: PLAN-008 line, uses no requested reviewer or approval, and all current-head machine checks pass",
+    "An independent reviewer reports P0, P1 and P2 all zero for the corrective scope, dependency order and prevention of hidden accepted-contract edits",
+]
