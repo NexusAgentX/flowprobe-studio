@@ -1,0 +1,25 @@
+id = "PLAN-009"
+milestone = "v0.2"
+title = "Bind ARCH-004 to the accepted UDP path-purpose amendment"
+goal = "Make the existing ARCH-004 task contract explicitly depend on the authorized upstream correction before that architecture work resumes, without changing any ARCH-004 scope or acceptance requirement."
+depends_on = ["PLAN-008"]
+allowed_paths = ["specs/tasks/v0.2/ARCH-004.toml"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/tasks/README.md", "specs/tasks/v0.1/**", "specs/tasks/v0.2/PLAN-006.toml", "specs/tasks/v0.2/GOV-004.toml", "specs/tasks/v0.2/ARCH-001.toml", "specs/tasks/v0.2/ARCH-002.toml", "specs/tasks/v0.2/ARCH-003.toml", "specs/tasks/v0.2/ARCH-005.toml", "specs/tasks/v0.2/PLAN-008.toml", "specs/tasks/v0.2/PLAN-009.toml", "specs/nonconformance/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task PLAN-009 --base-ref origin/main --head-ref HEAD",
+    '''python -B -c 'import hashlib, os, subprocess, sys; path="specs/tasks/v0.2/ARCH-004.toml"; env=os.environ | {"GIT_NO_REPLACE_OBJECTS":"1","LC_ALL":"C"}; run=lambda *a: subprocess.check_output(["git","--no-replace-objects",*a],env=env); bases=run("merge-base","--all","origin/main","HEAD").decode().splitlines(); len(bases)==1 or sys.exit("expected exactly one merge base"); base=bases[0]; changed={p.decode() for p in run("diff","--no-ext-diff","--no-textconv","--no-renames","--name-only","-z",base,"HEAD").split(b"\0") if p}; changed=={path} or sys.exit("unexpected changed path set"); mode=lambda r: run("ls-tree",r,"--",path).split(None,2)[:2]==[b"100644",b"blob"]; mode(base) and mode("HEAD") or sys.exit("expected regular mode-100644 blobs"); digest=lambda r: hashlib.sha256(run("cat-file","blob",r+":"+path)).hexdigest(); digest(base)=="fa8fa5ad981f7517e0a745248ceddff8d068cf715b9c0d10cdf8da081067f9e0" or sys.exit("unauthorized base bytes"); digest("HEAD")=="92113ef00a1de3cb963bac5d4e7f7b17640bfbcb700b418dae881807691b8a2c" or sys.exit("unauthorized target bytes")' ''',
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "A fail-closed unique-merge-base predicate proves that the only changed path is the regular mode-100644 specs/tasks/v0.2/ARCH-004.toml trusted-base task contract and binds both its exact authorized base bytes and exact authorized target bytes",
+    "ARCH-004 depends_on changes exactly from ARCH-001 plus ARCH-002 to ARCH-001 plus ARCH-002 plus ARCH-005, preserving that order and introducing no other dependency",
+    "Every other ARCH-004 field and byte remains unchanged, including its goal, allowed and forbidden paths, acceptance commands and definition of done",
+    "The ARCH-005 task contract exists on the trusted base and the resulting acyclic DAG orders PLAN-009 before ARCH-005 and ARCH-005 before ARCH-004",
+    "The change contains no architecture prose, implementation, fixture, milestone claim, workflow, remote setting, compatibility shim, migration or dependency artifact",
+    "PLAN-007 remains absent and no implementation task is created before the corrected ARCH-004 architecture task merges",
+    "The pull request body contains exactly one unquoted Task ID: PLAN-009 line, creates no requested reviewer or approval, all machine checks pass, and an independent reviewer reports P0-P2 zero",
+]
