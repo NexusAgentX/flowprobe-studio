@@ -2753,7 +2753,10 @@ operational children of the same actor-wide factory remain visible in both
 exact censuses. An operational SOCKS5 UDP association is a distinct future
 ARCH-004 data-plane resource and cannot reuse these verification children, but
 if it belongs to the same Network Runtime it remains governed by and visible in
-that actor's one factory policy and census.
+that actor's one factory policy and census. A direct runtime-destination UDP
+socket is likewise a distinct ARCH-004 operational child: it never reuses a
+verification child and remains governed by and visible in that same actor-wide
+factory policy, accumulator chain, and exact censuses.
 
 For every attempt the exact time order is `tag50.observed_at <=
 attempt_tag34.observed_at < tag50.expires_at`. On the clean protocol-successful
@@ -3626,16 +3629,17 @@ Candidates are deduplicated and ordered by the selected purpose-specific family
 policy, then normalized address bytes and scope. Proxy endpoint and
 activation-target sets are discovered in ARCH-001 `Preflighting` and sealed in
 the candidate plan. A SOCKS relay set is produced by the sealed observation
-recipe after the runtime returns `BND.ADDR`. A future runtime-destination set is
-not a tag-4 purpose in v1; its future per-flow contract must register its own
-context/signer/outer reference and can never pretend the result existed in the
-activation plan. Ambient re-resolution by a runtime library is forbidden
-whenever `LocalAddress` is selected. The runtime receives the selected address
-set. The original name is retained only for proxy-endpoint TLS SNI/certificate
-identity or a target `ProxyName` authority. A target `LocalAddress` HTTP CONNECT
-or SOCKS request emits only the selected literal candidate and never the
-original name; `ProxyName` sends the exact normalized name to the proxy and has
-no local target result set.
+recipe after the runtime returns `BND.ADDR`. `RuntimeDestinationUdp` does not add
+a tag-4 `ResolutionPurpose`. Any runtime-destination result used by the accepted
+ARCH-004 per-flow contract has its own context, signer, and outer reference and
+can never pretend that the result existed in the activation plan. Ambient
+re-resolution by a runtime library remains forbidden whenever `LocalAddress` is
+selected. The runtime receives the selected address set. The original name is
+retained only for proxy-endpoint TLS SNI/certificate identity or a target
+`ProxyName` authority. A target `LocalAddress` HTTP CONNECT or SOCKS request
+emits only the selected literal candidate and never the original name;
+`ProxyName` sends the exact normalized name to the proxy and has no local target
+result set.
 
 TTL expiry, resolver epoch change, route epoch change, or a candidate-set change
 invalidates the result. A negative result cannot be replaced by an ambient
@@ -4220,6 +4224,7 @@ PathPurpose =
   | ExternalLocalProxyUpstreamUdp
   | RecoveryConnectivityProbe
   | ProductTelemetry
+  | RuntimeDestinationUdp
 
 ActorNetworkIsolationInitializationV1 =
   | ExistingPreplanReadback {
@@ -4306,6 +4311,10 @@ LocalIpcPermitV1 = {
 }
 ```
 
+`PathPurpose` uses zero-based tags in displayed order. `RuntimeDestinationUdp`
+is tag 14; tags 0 through 13 retain their existing encodings. Every unknown tag,
+including 15 and above in this version, is invalid.
+
 The graph contains at least one instance for every component in the trust table,
 even when that component is an in-process library. Every instance has either
 exactly one `NoExternalNetworkPath` declaration or `1..=16` unique sorted
@@ -4387,12 +4396,23 @@ Every `RequiredPath.endpoint_binding` selects exactly this purpose matrix:
   the proxy; the tag-18 target and authorization remain separately sealed in
   the proof specification and enclosing proof/checkpoint root and are never
   represented as that socket peer;
-- `RuntimeDestinationTcp`, `Socks5UdpRelay`, `CertificateStatus`,
-  `RecoveryConnectivityProbe`, and `ProductTelemetry` use
+- `RuntimeDestinationTcp`, `RuntimeDestinationUdp`, `Socks5UdpRelay`,
+  `CertificateStatus`, `RecoveryConnectivityProbe`, and `ProductTelemetry` use
   `OwnedActorAllExternalEndpoints` with the same actor's exact tag-14 factory
   policy; and
 - the three `ExternalLocalProxyUpstream*` purposes use
   `ExternalLocalProxyAllExternalEndpoints` with the actor's exact tag-5 identity.
+
+A dormant `RuntimeDestinationUdp` declaration is valid in the sealed actor graph
+only on the existing FlowProbe-owned actor that will open the operational
+socket, with the singleton `Udp` transport, the declared families, the current
+plan's exact tag-1 `Direct` selection, and the same actor's tag-14 factory
+policy. The dormant declaration contains no child or future ARCH-004 binding and
+grants no socket, endpoint, or byte-release authority. A concrete child becomes
+valid later only through the atomic child-time acceptance of an ARCH-004
+`transport.udp.path.v1` binding that references that declaration and the same
+tentative child. The declaration is invalid for an external HTTP, HTTPS, or
+SOCKS selection, a DNS path, or any verification role.
 
 `ExternalSocks5::RequireAssociate` requires three distinct child-role bindings
 on that same `NetworkRuntime`: A uses the context-specific
@@ -4407,9 +4427,9 @@ introduced.
 No other purpose/binding/selection combination has an encoding. The two all-external variants
 are loop-exclusion scopes only: they ensure every socket of the exact owned
 factory or independently owned local-proxy process bypasses the captured path;
-they grant no DNS, target, telemetry, certificate, destination, or protocol
-authority, which remains in its separate typed policy. A future target or relay
-observation never feeds back into the pre-plan graph.
+they grant no DNS, target, telemetry, certificate, destination, routing, policy,
+protocol, or send authority, which remains in its separate typed policy. A
+future target or relay observation never feeds back into the pre-plan graph.
 The release Renderer entry is mandatory and uses `NoExternalNetworkPath` with
 preventive renderer sandbox/socket-deny policy and complete readback evidence.
 Its local typed IPC is separately bounded. The renderer policy identity is
@@ -4560,13 +4580,19 @@ EgressExclusionReadbackOutcomeV1 =
 
 Each required path has exactly one or more entries whose union covers every
 declared family, transport, endpoint binding, DNS bootstrap, proxy control
-connection, SOCKS5 UDP relay, certificate-status connection, and target probe.
+connection, direct runtime-destination UDP path, SOCKS5 UDP relay,
+certificate-status connection, and target probe.
 Every entry's `endpoint_binding` is byte-identical to its actor declaration;
 `ProbeTargetProfiles` is one-to-one with the proof specification, and
 `OwnedActorAllExternalEndpoints` repeats a tag-14 policy whose actor/component/
 runtime identity equals the declaration. Entries must
 name the sealed baseline egress anchor and prevent use of any FlowProbe capture
 interface, route/table, redirect, or recursive proxy input.
+For `RuntimeDestinationUdp`, the covered tuple repeats the exact actor, purpose,
+declared family, singleton UDP transport, and same-actor
+`OwnedActorAllExternalEndpoints` binding. Its enclosing exclusion set carries
+the exact tag-1 `Direct` digest. The entry and broad endpoint scope prove only
+preventive loop exclusion and cannot authorize a destination or a send.
 `EgressExclusionSetV1.egress_selection_safe_digest` and
 `EgressExclusionCompletenessProofV1.egress_selection_safe_digest` are
 byte-identical to the plan's tag-1 digest; tag 0 and a producer projection are
@@ -8164,6 +8190,8 @@ FactoryTerminalFailureReasonV1 =
       failure: SocketCensusFailureV1,
     }
   | LifecycleInvariantFailed
+  | RuntimeDestinationUdpBindingInvalid
+  | RuntimeDestinationUdpBindingConsumeFailed
 
 FactoryVerificationSequenceContextV1 = {
   proof_specification_digest,
@@ -8890,9 +8918,15 @@ repeat the enforcement policy's fresh 32-byte lease identity, complete provider
 identity, and complete profile. The helper journals that tuple before accepting
 the factory. Response loss may replay only the byte-identical apply or
 compensation result; a changed actor/process/provider/lease cannot be targeted.
-`allowed_path_purposes` contains `1..=14` unique purpose tags,
+`allowed_path_purposes` contains `1..=15` unique purpose tags,
 `address_families` `1..=2` unique family tags, and `transports` `1..=2` unique
 transport tags; each is ascending tag order and exactly matches the actor graph.
+A policy admitting `RuntimeDestinationUdp` contains purpose tag 14, the UDP
+transport, and every declared family. A cooperative policy's
+`CooperativeProtectProfileV1.covered_path_purposes` also contains tag 14 when
+that policy admits it; profile coverage without policy authorization grants no
+path. Purpose recognition alone is not capability evidence and creates no new
+capability key or disposition.
 `capability_report_digests` is a canonical `3..=5` list. Its first entry is the
 sole `SocketCreationEnforcement` report, its second is the sole `SocketCensus`
 report, and the remaining entries contain exactly one
@@ -8959,6 +8993,17 @@ root. In particular a `Socks5UdpRelay` child names the exact selectable
 candidate in the tag-50 association's tag-4 `Socks5Relay` checkpoint; it never
 reuses the proxy-control candidate or a probe-target endpoint. The broad loop
 scope alone is never endpoint authority.
+For `RuntimeDestinationUdp`, `path_purpose` is tag 14, `transport` is UDP, and
+the actor, factory policy, family, endpoint binding, selected endpoint, and
+route/interface observation equal the exact accepted ARCH-004
+`transport.udp.path.v1` binding that references the sealed dormant declaration
+and this child. The child root contains no digest or future reference to that
+outer binding, so the one-way relation is binding-to-child rather than a digest
+cycle. The
+`selected_endpoint_digest` is the exact tag-33 operational peer named by that
+binding. A missing or mismatched binding, TCP transport, proxy or resolver
+binding, SOCKS relay or association substitution, or use of the broad loop scope
+as endpoint authority is invalid and releases zero protocol bytes.
 `ExternalLocalProxyAllExternalEndpoints` is invalid in a FlowProbe factory child
 because that independently owned process has no FlowProbe tag-14 factory; its
 complete process/cooperative exclusion is proven by tag-9/tag-35 readback.
@@ -9260,18 +9305,28 @@ bounded `connect`; after successful connect, perform the connected-local-peer
 check when required; verify the phase-specific release evidence below;
 tentatively allocate the next sequence and lease-epoch count; construct and sign
 the complete child root; then execute one atomic local publication transaction
-before the bounded deadline. That transaction makes the append-only queue entry
-visible to both readers, commits the sequence/lease-epoch count, and hands the
-socket to the runtime behind its one-shot no-send latch as one indivisible state
-change. It either performs all three effects or none: on failure no child root is
-visible, no sequence/count is committed, and no socket is handed off. There is
-no separately fallible release step after a committed child. Only after the
-transaction returns success may the runtime attempt the first TLS,
+before the bounded deadline. For `RuntimeDestinationUdp`, after constructing the
+tentative child and before that transaction, the factory obtains the candidate
+ARCH-004 `transport.udp.path.v1` binding, verifies its declaration, child,
+endpoint, context, actor/factory/family/transport, and current plan/lease/fence
+equalities, and keeps the socket behind the closed no-send latch. That binding
+does not enter or rewrite the sealed candidate plan. The publication transaction
+then makes the append-only child queue entry visible to both readers, atomically
+accepts the exact ARCH-004 binding for that child, commits the sequence/lease-
+epoch count, and hands the socket to the runtime behind its one-shot no-send
+latch as one indivisible state change. For every other purpose the same
+transaction has no ARCH-004-binding effect. It either performs every applicable
+effect or none: on failure no child or binding acceptance is visible, no
+sequence/count is committed, and no socket is handed off. There is no separately
+fallible release step after a committed child. Only after the transaction
+returns success may the first-byte guard consume that exact accepted binding and
+open the one-shot latch; only then may the runtime attempt the first TLS,
 authentication, credential, challenge, or other application-protocol byte. Any
 failed queue, creation, mechanism, option/route read-back, HostLocal peer,
-release-evidence, phase-latch, signing, limit, or atomic publication step is an invariant
-failure: it closes the socket with zero application-protocol/credential bytes,
-marks that factory epoch terminal-failed, and prevents further socket creation.
+release-evidence, phase-latch, signing, outer-binding validation, limit, atomic
+publication, or first-byte-guard step is an invariant failure: it closes the
+socket with zero application-protocol/credential bytes, marks that factory
+epoch terminal-failed, and prevents further socket creation.
 Queue loss/full/timeout cannot be converted into an unsigned
 or later observation. Existing ARCH-001 channel/barrier liveness then denies
 proof/commit or closes the active data path. This is not a helper/watchdog child-
@@ -9385,6 +9440,28 @@ cannot overwrite its child or step.
 `LifecycleInvariantFailed` only to counter/open-set bookkeeping. Unknown,
 opaque, duplicate, later-overwriting, or phase-inapplicable reasons invalidate
 the latch rather than creating a typed outer failure.
+`RuntimeDestinationUdpBindingInvalid` is the only legal reason when the first
+failed creation step is the pre-publication validation of a missing, mismatched,
+rejected, or lost ARCH-004 `transport.udp.path.v1` candidate binding. It is valid
+only for a tentative `RuntimeDestinationUdp` child after child construction and
+before the atomic publication transaction; no other purpose or phase may use it.
+The transition increments the prior latch counter by exactly one, closes the
+unpublished socket, exposes no child/binding/count state, and releases zero
+protocol bytes.
+`RuntimeDestinationUdpBindingConsumeFailed` is the only legal reason when that
+same exact binding was accepted by a successful atomic publication but the
+post-publication first-byte guard cannot consume or reauthenticate it for a
+non-expiry reason before the first protocol byte. It is valid only for the
+published `RuntimeDestinationUdp` child named by that binding; an expired child,
+peer, plan, lease, or fence continues to use `FirstByteExpiryGuardFailed`.
+The child, binding acceptance, socket sequence, and lease-epoch count remain
+fully committed and append-only. The socket closes with zero protocol bytes,
+the latch counter advances by exactly one, and the mandatory next tag-34
+checkpoint includes the child in its creation chain plus exactly one
+`OrdinaryLocal` closure transition, omits it from current-open provenance, and
+binds the resulting tag-46 terminal latch and both exact censuses. Erasing the
+committed child/binding/count, omitting or relabeling that closure, retrying the
+send, or using this reason before publication or for another purpose is invalid.
 
 The factory emits one signed `SocketPolicyChildObservationV1` per sequence. Let
 `A_seed = SHA-256("FlowProbe.Egress.SocketAccumulator.v1\0" ||
@@ -9500,6 +9577,12 @@ VerificationOnly Open root or a digest from a Running, FinalizedHeld,
 TerminalHeld, stale-counter, different-factory, or different-lease root cannot
 authorize an ordinary child, and an initial tag-15 observation is not an Open
 accumulator substitute.
+`RuntimeDestinationUdp` is an operational non-verification child and therefore
+uses only `Ordinary`; `Reserved` is invalid. It enters the next chronological
+`NonEmpty` tag-34 chain, current-open provenance, and both exact censuses. Its
+close uses the existing ordinary closure rules, and every created socket
+increments the existing open-socket and lease-creation accounting exactly once.
+No per-datagram child, checkpoint, counter, or quota is introduced.
 
 `maximum_new_sockets_per_lease_epoch` is cumulative, not a per-checkpoint
 allowance. The first child in an epoch has count one; every later child increments
@@ -9542,7 +9625,10 @@ The session graph is ordered:
    tag-14 socket policies are sealed first; the actor graph may then reference
    those exact tag-4/tag-3/tag-18/tag-14 roots, after which the proof
    specification, expected proof predicate, and complete exclusion graph bind
-   the same lists without a backward digest edge;
+   the same lists without a backward digest edge. A
+   `RuntimeDestinationUdp` declaration is dormant here: it binds only its
+   static actor/factory/family/UDP/Direct tuple, never a future child or ARCH-004
+   binding;
 2. helper sealing of that exact graph and transition to `Prepared`; no new
    session-scoped Network Runtime, Capture/data-plane actor, or shared OS
    resource has started or been applied before this boundary. Already-live
@@ -10205,8 +10291,9 @@ actor/component/runtime equal `source_actor_id` and `runtime_instance_id`.
 Every other index is that factory's latest
 fresh chronological Complete/equal `Open { release_scope=
 OrdinaryAndVerification }` checkpoint, including all ordinary creation/closure
-activity that linearized through that checkpoint. Creation remains held from
-that checkpoint onward. A close that wins after the checkpoint but before the
+activity, including every `RuntimeDestinationUdp` ordinary creation and closure,
+that linearized through that checkpoint. Creation remains held from that
+checkpoint onward. A close that wins after the checkpoint but before the
 combined lifecycle/close-bookkeeping lock does not rewrite the outer
 predecessor; the corresponding batch member's since-previous closure ledger and
 dual census absorb it. These values are the exact
@@ -10344,6 +10431,10 @@ semantics.
 Until ARCH-004 registers a required path, capability, exclusion dependency,
 proof, and health predicate:
 
+- recognizing or declaring `RuntimeDestinationUdp`, or possessing an
+  `OwnedActorAllExternalEndpoints` scope, cannot make direct UDP ready; until the
+  exact accepted ARCH-004 `transport.udp.path.v1` binding exists, the path is
+  unsupported and sends zero bytes;
 - a DNS name requiring `LocalAddress` cannot be activated through an ambient
   resolver;
 - proxy-endpoint bootstrap DNS cannot recurse through the pending FlowProbe TUN
@@ -10358,7 +10449,9 @@ through the selected path and complete exclusion set or explicitly blocked. A
 timeout, unsupported proxy feature, resolver loss, or relay loss never changes
 it to direct. ARCH-004 may define an explicit user-authorized direct fallback
 as a different request/policy, but it cannot report that policy as the original
-selection.
+selection. Such a fallback reaches `RuntimeDestinationUdp` only through its
+separately authorized replacement plan whose exact tag-1 selection is `Direct`;
+the original external selection acquires no direct authority.
 
 ## 16. Errors and safe diagnostics
 
@@ -10747,8 +10840,9 @@ candidate rather than another member of the sealed set.
   plus B/C-current-present tag-34 checkpoints; for one through four consecutive
   successful active groups require an exact verification projection of one
   through four retained B+C pairs with every A absent. For renewal, seed legal
-  `RuntimeDestinationTcp` children in the same actor-wide factory and require
-  them in addition to that projection; postactivation remains quiescent. After the
+  `RuntimeDestinationTcp` and `RuntimeDestinationUdp` ordinary children in the
+  same actor-wide factory and require them in addition to that projection;
+  postactivation remains quiescent. After the
   final group, cross the `VerificationAssociationTeardown` completion ordinal
   against every queued loss/cancel/deadline: an earlier event denies success,
   while completion-first controlled-closes every retained pair and produces the exact next
@@ -10917,12 +11011,35 @@ terminal artifact absence.
 - exercise the complete `RequiredPath`/entry shared binding matrix: proxy
   control/tag-4, two DNS purposes/tag-3, three probe phases/the exact ordered
   tag-18 list for `Direct` versus the proxy tag-4 set for every external
-  selection, five owned dynamic purposes/the same-actor tag-14 factory, and
+  selection, six owned dynamic purposes (`RuntimeDestinationTcp`,
+  `RuntimeDestinationUdp`, `Socks5UdpRelay`, `CertificateStatus`,
+  `RecoveryConnectivityProbe`, and `ProductTelemetry`)/the same-actor tag-14
+  factory, and
   three local-proxy upstream purposes/tag-5; reject every wrong variant,
   target endpoint substituted as an external OS peer, proxy endpoint
   substituted as a Direct target, SOCKS relay/proxy-control candidate swap,
   missing/extra/reordered target, cross-actor factory, declaration/entry/
   completeness mismatch, and all-external scope used as destination authority;
+  accept purpose tag 14 only for UDP, `Direct`, the same-actor owned binding,
+  `Ordinary` admission, and the exact ARCH-004 outer binding; reject tag 15 and
+  above, TCP, every external selection, proxy/resolver/probe/local-proxy
+  bindings, missing outer binding, selected-endpoint substitution, `Reserved`
+  admission, and substitution for the existing `Socks5UdpRelay` role-C path;
+  accept a sealed dormant declaration with no child or dynamic binding, reject
+  any candidate-plan reference to a future child/binding, and at child time race
+  binding construction, child publication, queue visibility, sequence/count
+  commit, handoff, and the first-byte guard in every order; binding-before-child,
+  child-visible-without-binding, cross-child binding, binding rejection/loss,
+  publication failure, or first-byte-before-acceptance must leave no partial
+  child/binding/count visibility and release zero protocol bytes; every missing,
+  mismatched, rejected, or lost pre-publication binding must produce exactly
+  `RuntimeDestinationUdpBindingInvalid`, transition the latch counter by one,
+  and leave all three dynamic states absent; after successful publication,
+  inject every non-expiry binding-consume failure and require exactly
+  `RuntimeDestinationUdpBindingConsumeFailed`, the committed child/binding/count
+  to remain present, zero protocol bytes, one `OrdinaryLocal` closure, absence
+  from current-open provenance, and matching tag-46 plus dual-census evidence;
+  cross both reasons across the opposite publication state and reject them;
 - tag-54 actor-isolation-policy/tag-55 readback wrong actor, policy root,
   initialization branch, Preplan/Preactivation/Active checkpoint context,
   policy/readback epoch, proof/lease/fence, extra
@@ -11283,7 +11400,8 @@ must exercise the shipped artifacts. At minimum each claimed platform requires:
 2. a local external proxy loop canary using the claimed listener-identity and
    exclusion mechanism;
 3. IPv4 and IPv6 canaries for every claimed family;
-4. TCP and SOCKS5 UDP canaries for every claimed transport;
+4. TCP canaries and, for each claimed UDP combination, separate direct-
+   destination UDP and SOCKS5 UDP canaries as applicable;
 5. before/during/after ordinary-connectivity oracles;
 6. exactly-one Capture Core traversal for intended traffic and zero traversal
    for every excluded runtime/Capture/helper/watchdog/probe/local-proxy path;
@@ -11293,6 +11411,11 @@ must exercise the shipped artifacts. At minimum each claimed platform requires:
    tests at every mutating boundary; and
 9. artifact, backend, capability, plan, journal, packet-marker, target-nonce commitment,
    and final baseline-equivalence evidence sufficient to reproduce the claim.
+
+Recognition of `RuntimeDestinationUdp` is not capability or support evidence and
+changes no section 13.5 matrix cell. A platform remains unsupported until its
+exact packaged tuple satisfies every existing capability, admission, exclusion,
+checkpoint, health, recovery, and real-host gate.
 
 The local proxy canary uses synthetic credentials and payloads only. It proves
 the external proxy remains independently owned and that its egress bypasses the
