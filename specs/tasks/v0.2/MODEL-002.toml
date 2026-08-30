@@ -1,0 +1,32 @@
+id = "MODEL-002"
+milestone = "v0.2"
+title = "Implement additive UDP and DNS normalized model types"
+goal = "Add the accepted bounded generic datagram and DNS observation types to the normalized-flow extension model without exposing payloads, storage layout, routing claims or unavailable evidence as observed data."
+depends_on = ["PLAN-007"]
+allowed_paths = [
+    "crates/model/src/lib.rs",
+    "crates/model/src/protocol.rs",
+    "crates/model/src/udp_dns.rs",
+    "crates/model/tests/udp_dns_extension.rs",
+]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-model --test udp_dns_extension",
+    "cargo clippy --locked -p flowprobe-model --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task MODEL-002 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The additive model represents bounded datagram identity, original destination, direction, packet and byte counts, timing, idle closure, process provenance and explicit observed, inferred, opaque and unavailable states",
+    "DNS metadata represents query and response correlation, canonical name policy, type, class, response code, transport, resolver, timing and truncation without claiming visibility for encrypted or undecoded traffic",
+    "PersistExactAuthorized, PersistKeyedDigest and Redacted name-retention outcomes are type-distinct, and ordinary metadata contains neither raw datagram payload nor an internal storage path",
+    "Construction validates all contract bounds, endpoint consistency, time ordering, cardinalities and state combinations and returns structured errors for invalid input",
+    "Serialization is deterministic and additive extension fields round-trip without weakening validation of reserved fields or the existing NormalizedFlow v0 fixture",
+    "Tests cover each privacy and availability state, unknown additive fields, maximum boundaries, invalid combinations and secret-safe Debug output",
+    "No capture, decoder, correlation engine, persistence, routing, runtime capability, dependency, manifest, lockfile or accepted-contract change in MODEL-002",
+]

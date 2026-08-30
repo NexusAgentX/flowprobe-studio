@@ -1,0 +1,28 @@
+id = "INT-004"
+milestone = "v0.2"
+title = "Close the v0.2 integration and release gate"
+goal = "Verify the complete deterministic and privileged evidence boundary and mark v0.2 complete only when every selected Windows, Linux, and macOS row preserves ordinary connectivity and passes direct and local-external loop prevention."
+depends_on = ["EVID-001"]
+allowed_paths = ["tests/integration/v0_2/**", "scripts/check_v0_2_integration.py", ".github/workflows/contract.yml", "docs/milestones/v0.2.md"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/development/**", "docs/release-evidence/**", "specs/**", "apps/**", "crates/**", "runtime/**", "plugins/**", "tests/fixtures/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "python -B scripts/check_v0_2_integration.py --product-source-task APP-002 --evidence-task EVID-001 --current-ref HEAD --require-platform windows --require-platform linux --require-platform macos",
+    "cargo test --manifest-path tests/integration/v0_2/Cargo.toml --locked --all-targets",
+    "cargo clippy --manifest-path tests/integration/v0_2/Cargo.toml --locked --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task INT-004 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The integration verifier resolves the immutable APP-002 product source and EVID-001 evidence bundle from trusted history, proves that no product or build-input path changed between that product source and current head, recomputes the canonical bundle digest, and rejects missing, stale, duplicate, unselected or cross-platform substitutions",
+    "The gate requires at least one SupportedByDesign, Ready and RealHostVerified exact row on each of Windows, Linux and macOS; missing platform coverage fails and cannot be treated as an empty all-selected set",
+    "Start, stop, concurrent intent, engine crash, helper crash, UI crash, lease expiry, watchdog takeover, boot recovery and external drift cannot leave a selected test host without the recorded ordinary-connectivity oracle",
+    "Built-in direct and local external HTTP, HTTPS and SOCKS5 paths exercise requested IPv4, IPv6, UDP and DNS policy without recursion or silent direct fallback; unsupported combinations remain explicit",
+    "Persistent CA install and uninstall are verified independently from network-session stop and no release claim is made for an unselected trust target or TLS consumer",
+    "The v0.2 milestone records exact supported tuples, explicit unsupported rows, deterministic versus privileged evidence, current commit identity, commands and results without changing the objective or erasing limitations",
+    "Required CI runs the hermetic integration gate; privileged evidence remains a separately authenticated release input and cannot be replaced by a skipped, neutral or fake-host job",
+    "The release pull request contains exactly one unquoted Task ID: INT-004 line, creates no requested reviewer or approval, all required checks pass, and independent security and release reviewers report P0-P2 zero",
+]

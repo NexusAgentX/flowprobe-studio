@@ -1,0 +1,40 @@
+id = "UPSTREAM-001"
+milestone = "v0.2"
+title = "Implement deterministic direct and external upstream engines"
+goal = "Implement bounded direct, HTTP CONNECT, HTTPS CONNECT and SOCKS5 protocol engines behind NetworkRuntime with hermetic transport tests, while retaining typed Unsupported until packaged real-host evidence exists."
+depends_on = ["EGR-001", "CFG-002", "CAP-002"]
+allowed_paths = [
+    "Cargo.lock",
+    "runtime/singbox/Cargo.toml",
+    "runtime/singbox/src/lib.rs",
+    "runtime/singbox/src/egress.rs",
+    "runtime/singbox/src/egress/direct.rs",
+    "runtime/singbox/src/egress/http_connect.rs",
+    "runtime/singbox/src/egress/https_connect.rs",
+    "runtime/singbox/src/egress/socks5.rs",
+    "runtime/singbox/src/egress/udp.rs",
+    "runtime/singbox/tests/upstream_protocols.rs",
+]
+forbidden_paths = ["AGENTS.md", "runtime/singbox/AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-singbox-runtime --test upstream_protocols",
+    "cargo clippy --locked -p flowprobe-singbox-runtime --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task UPSTREAM-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "Protocol engines accept only an already-admitted typed transport supplied by their caller, never construct or release an ambient socket, and preserve typed Unsupported until WATCH-001 can provide the accepted release proof",
+    "HTTP CONNECT emits one bounded authority request, accepts only a complete successful 2xx response, handles the bounded 407 policy and rejects malformed, oversized, informational, redirected or trailing responses with redaction-safe errors",
+    "HTTPS CONNECT authenticates the configured proxy identity and trust policy before CONNECT, enforces the accepted verifier and discontinuity behavior, and never falls back to plaintext or an ambient system verifier",
+    "SOCKS5 implements exact method negotiation, optional username-password authentication and CONNECT; RequireAssociate additionally keeps its control connection live and validates BND address, relay locality, source, RSV, FRAG and the bounded UDP canary",
+    "HTTP and HTTPS reject UDP before mutation; SOCKS5 Disable rejects UDP; RequireAssociate has no UDP-over-TCP, domain-relay resolver, fragmented relay or direct fallback path",
+    "Resolution, connect, handshake, authentication, exchange, canary and health operations have explicit byte, attempt and deadline bounds and return typed terminal reasons without retaining peer-controlled bytes",
+    "The adapter consumes protected compiler output and reports exact typed capability and health evidence, but deterministic success remains DesignOnly or Unsupported and cannot become RealHostVerified or Supported",
+    "Hermetic fake peers cover partial reads and writes, response loss, malformed frames, authentication failure, TLS identity failure, association loss, IPv4 and IPv6, UDP refusal and secret-safe diagnostics",
+    "Any added dependency is minimal, locked and called out; no host route, TUN, helper, watchdog, accepted architecture, milestone claim, placeholder or compatibility layer changes in UPSTREAM-001",
+]

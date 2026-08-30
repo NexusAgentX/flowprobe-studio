@@ -1,0 +1,29 @@
+id = "TUN-001"
+milestone = "v0.2"
+title = "Implement the independent-runtime TUN attachment boundary"
+goal = "Expose the accepted attachment lifecycle through NetworkRuntime and implement the documented pinned-runtime handoff when ARCH-006 selects one, or retain a tested typed Unsupported path when no compatible surface exists, without creating a native TUN or claiming platform readiness."
+depends_on = ["ARCH-006", "UPSTREAM-001"]
+allowed_paths = ["Cargo.lock", "crates/runtime-api/src/lib.rs", "crates/runtime-api/src/types.rs", "crates/runtime-api/src/error.rs", "crates/runtime-api/tests/tun_attachment.rs", "runtime/singbox/Cargo.toml", "runtime/singbox/src/lib.rs", "runtime/singbox/src/tun_attachment.rs", "runtime/singbox/tests/tun_attachment.rs"]
+forbidden_paths = ["AGENTS.md", "runtime/singbox/AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "apps/**", "crates/runtime-api/src/fake.rs", "crates/runtime-api/tests/fake_runtime.rs", "plugins/**", "tests/**", "scripts/**", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-singbox-runtime --test tun_attachment",
+    "cargo clippy --locked -p flowprobe-singbox-runtime --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task TUN-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The independent managed sing-box process accepts only one helper-authorized attachment bound to exact installation, runtime instance, network generation, attachment identity, authenticated peer and deadline; stale, replayed, cross-instance and unknown-version handoffs fail closed",
+    "NetworkRuntime owns typed prepare-attachment, admit-ResumeBarrier, status and detach operations with fail-closed default implementations, so Supervisor and APP never call an adapter-only inherent API or bypass the frozen runtime boundary",
+    "Packet exchange uses bounded framed reads and writes, queue and byte ceilings, deterministic backpressure, half-close and terminal error semantics and never accepts an arbitrary device path, descriptor, handle or renderer-provided endpoint",
+    "No packet is delivered to or emitted by the runtime before the exact committed ResumeBarrier proof is verified; barrier loss, fence change, lease loss, helper restart and runtime restart stop the attachment before further packet admission",
+    "Close and restart are idempotent, reclaim all channel and runtime resources, distinguish clean close from crash or peer loss, and expose bounded typed evidence needed by WATCH-001 recovery",
+    "The adapter preserves the frozen independent-process boundary and does not embed libbox, Capture Core, a privileged platform backend or a test transport in production",
+    "Only a documented surface of the exact pinned sing-box source and package may implement packet handoff; the task does not fork upstream, copy internal packages, patch an untracked binary or infer compatibility from another version, and returns the exact typed Unsupported reasons if ARCH-006 selected no compatible surface",
+    "Hermetic fake channels cover partial frames, saturation, reordered control, stale identities, response loss, barrier refusal, concurrent close, peer death and restart without creating a real TUN or changing host networking",
+    "All platform capabilities remain Unsupported or Unsafe until a selected native backend and real-host evidence complete; this task changes no accepted architecture, milestone, compatibility or migration artifact",
+]

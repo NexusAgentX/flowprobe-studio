@@ -1,0 +1,25 @@
+id = "PLAT-001"
+milestone = "v0.2"
+title = "Register completed native backends in the root workspace"
+goal = "Integrate the independently implemented Windows, Linux, and macOS backend packages into the root workspace once, removing their temporary standalone-workspace boundaries and producing one authoritative lockfile without changing backend behavior."
+depends_on = ["WIN-001", "LINUX-001", "MAC-001"]
+allowed_paths = ["Cargo.toml", "Cargo.lock", "crates/platform-windows/Cargo.toml", "crates/platform-windows/Cargo.lock", "crates/platform-linux/Cargo.toml", "crates/platform-linux/Cargo.lock", "crates/platform-macos/Cargo.toml", "crates/platform-macos/Cargo.lock"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/runtime-api/**", "crates/supervisor/**", "crates/ca-lifecycle/**", "crates/platform-windows/src/**", "crates/platform-windows/tests/**", "crates/platform-linux/src/**", "crates/platform-linux/tests/**", "crates/platform-macos/src/**", "crates/platform-macos/tests/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo clippy -p flowprobe-platform-windows -p flowprobe-platform-linux -p flowprobe-platform-macos --all-targets --locked -- -D warnings",
+    "cargo test -p flowprobe-platform-windows -p flowprobe-platform-linux -p flowprobe-platform-macos --all-targets --locked",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task PLAT-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "All three already implemented packages become root workspace members and retain their exact public API, native behavior, typed unsupported behavior and focused tests; this task adds no backend source file",
+    "Each temporary package-local lockfile and standalone workspace marker is removed only after the root lockfile resolves the same path packages and dependency versions and all three package suites pass under the root workspace",
+    "BACKEND-001 remains the sole owner of shared backend traits; registration adds no duplicate trait, bridge adapter, fake production backend, native mutation, compatibility shim or migration layer",
+    "A selected platform-support row remains data and does not become Ready, Active or RealHostVerified merely because its package is a workspace member",
+    "No accepted architecture, product integration, milestone claim, requested reviewer or approval is changed or created",
+]

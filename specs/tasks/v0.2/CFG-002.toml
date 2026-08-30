@@ -1,0 +1,32 @@
+id = "CFG-002"
+milestone = "v0.2"
+title = "Compile protected egress and UDP routing overlays"
+goal = "Compile the accepted direct and external upstream selections into deterministic protected sing-box JSON for the pinned runtime while rejecting namespace collisions, unsupported transport combinations and any attempt to elevate capability."
+depends_on = ["EGR-001"]
+allowed_paths = [
+    "crates/config-compiler/src/lib.rs",
+    "crates/config-compiler/tests/egress_overlay_contract.rs",
+]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/adr/**", "docs/contracts/**", "docs/milestones/**", "specs/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo test --locked -p flowprobe-config-compiler --test egress_overlay_contract",
+    "cargo clippy --locked -p flowprobe-config-compiler --all-targets -- -D warnings",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task CFG-002 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "Compilation maps Direct, ExternalHttp, ExternalHttps and ExternalSocks5 to the exact protected outbound, rule, detour, interface and network fields accepted for the repository-pinned sing-box release",
+    "External HTTP and HTTPS compile TCP only, SOCKS5 Disable compiles TCP only, SOCKS5 RequireAssociate compiles only the accepted TCP and UDP form, and unsupported UDP never falls back to direct",
+    "Direct destination UDP is emitted only with the accepted RuntimeDestinationUdp purpose inputs and never by reusing DNS, TCP, SOCKS relay or generic detour authority",
+    "User objects cannot define, shadow, reorder or reference a protected __flowprobe_* object in a way that changes system ownership, and collision failure occurs before runtime output",
+    "Invalid endpoints, credentials, family policy, runtime version or unsupported selection combinations return bounded typed refusals and produce no partial compiled configuration",
+    "Canonical output and its redacted inspection form are deterministic; passwords, bearer material and unsafe authentication bytes never appear in diagnostics or snapshots",
+    "Compiler output carries no Supported, Ready or RealHostVerified claim and cannot promote a typed Unsupported runtime capability",
+    "Tests use exact JSON assertions for every selection, reserved-name attacks, UDP refusal, version mismatch, determinism and redaction; no runtime process, socket or host mutation occurs",
+    "No dependency, manifest, lockfile, runtime adapter, accepted architecture, milestone claim, placeholder or compatibility layer changes in CFG-002",
+]

@@ -1,0 +1,27 @@
+id = "WIN-001"
+milestone = "v0.2"
+title = "Implement the selected Windows native network backend"
+goal = "Implement every exact Windows tuple selected by ARCH-007, or retain and prove the fail-closed typed Unsupported backend when no Windows tuple was selected, without broadening platform support."
+depends_on = ["ARCH-007", "BACKEND-001", "CA-001"]
+allowed_paths = ["crates/platform-windows/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/platform-linux/**", "crates/platform-macos/**", "crates/runtime-api/**", "crates/supervisor/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --manifest-path crates/platform-windows/Cargo.toml -- --check",
+    "cargo clippy --manifest-path crates/platform-windows/Cargo.toml --all-targets --locked -- -D warnings",
+    "cargo test --manifest-path crates/platform-windows/Cargo.toml --all-targets --locked",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task WIN-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "If ARCH-007 selected Windows rows, the crate implements exactly those tuples and returns typed Unsupported for every other release, architecture, helper identity, adapter authority, trust target or consumer tuple; if none was selected, it performs zero OS mutation and the typed Unsupported conformance suite passes",
+    "The package is a temporary standalone Cargo workspace with its own committed lockfile, depends only on the neutral BACKEND-001 API plus target-specific libraries, and does not depend on Supervisor or CA lifecycle or modify root workspace files",
+    "Every privileged mutation is an allowlisted helper operation with normalized before and after observations, durable intent, stable FlowProbe ownership identity, compare-before-restore, idempotent replay and bounded typed failure",
+    "TUN attachment, route and DNS activation, process exclusion, first-packet release, normal stop, helper or engine death, stale owner, restart and boot recovery preserve the ordinary-connectivity oracle under deterministic fault injection",
+    "CA install and removal use exact physical store identity, DER fingerprint and selected consumer semantics; broad subject deletion, raw private-key helper access and renderer privilege are impossible",
+    "Native calls are behind injectable traits, non-Windows builds compile and test the typed unsupported boundary, and no fake backend can report a real host Ready",
+    "No accepted architecture, milestone, unrelated platform backend, compatibility shim, migration layer, requested reviewer or approval is changed or created",
+]

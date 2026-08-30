@@ -1,0 +1,26 @@
+id = "BACKEND-001"
+milestone = "v0.2"
+title = "Implement the neutral native-backend API"
+goal = "Create one dependency-neutral Rust crate for typed network and trust observations, allowlisted mutations, recovery hooks, and fail-closed native backend traits so helper, CA, and platform crates compose without a Cargo dependency cycle."
+depends_on = ["ARCH-006", "TUN-001"]
+allowed_paths = ["Cargo.toml", "Cargo.lock", "crates/network-backend-api/**"]
+forbidden_paths = ["AGENTS.md", "PRODUCT.md", "ARCHITECTURE.md", "ROADMAP.md", "docs/**", "specs/**", "apps/**", "crates/runtime-api/**", "crates/supervisor/**", "crates/ca-lifecycle/**", "crates/platform-windows/**", "crates/platform-linux/**", "crates/platform-macos/**", "runtime/**", "plugins/**", "tests/**", "scripts/**", ".github/**", "package.json", "pnpm-lock.yaml", "mise.toml"]
+acceptance = [
+    "cargo fmt --all -- --check",
+    "cargo clippy --locked -p flowprobe-network-backend-api --all-targets -- -D warnings",
+    "cargo test --locked -p flowprobe-network-backend-api --all-targets",
+    "python -B scripts/validate_tasks.py",
+    "python -B scripts/check_task_scope.py check --task BACKEND-001 --base-ref origin/main --head-ref HEAD",
+    "python -B scripts/quality_gate.py",
+    "python -B scripts/check_task_scope.py audit --ledger specs/nonconformance/v0.1/task-scope.toml",
+    "mise run check",
+    "git diff --check origin/main...HEAD",
+]
+definition_of_done = [
+    "The crate contains only bounded platform-neutral identifiers, normalized observations, allowlisted mutation requests and results, capability reasons, recovery hooks and object-safe backend traits required by the accepted helper, session and CA protocols",
+    "The crate depends on neither Supervisor, CA lifecycle, a platform crate, sing-box, renderer, storage nor a native OS library, and no type exposes arbitrary commands, paths, descriptors, handles, private keys, captured secrets or raw platform output",
+    "A production-safe UnsupportedBackend performs zero OS operation and returns the exact typed unsupported reasons; deterministic conformance tests prove it cannot report Ready, Active, mutation success or RealHostVerified",
+    "Trait contracts make observe-before, journal-authorized apply, observe-after, compare-before-restore, one-use interaction gates, stable ownership identity and bounded error mapping explicit without implementing orchestration or persistence",
+    "WATCH-001, CA-001 and all native packages consume this crate in one direction; the API never depends back on any consumer and no duplicate backend trait may be introduced downstream",
+    "The task adds no helper process, native mutation, accepted architecture, milestone claim, placeholder success, compatibility shim or migration layer and introduces only minimal locked dependencies",
+]
